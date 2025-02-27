@@ -4,6 +4,7 @@ from numpy.fft import fftshift, ifftshift, fft2, ifft2
 
 
 from ..utils_pr import *
+from ..plotting_fs import plot_images_side_by_side
 
 class EPRy:
     
@@ -86,6 +87,45 @@ class EPRy:
         delta_lowres_ft = image_FT_update - image_FT
         self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += delta_lowres_ft *  weight_fac_pupil
 
+    def plot_rec_obj(self, 
+                     vmin1= None, vmax1=None, 
+                     vmin2= -np.pi, vmax2=np.pi, 
+                     title1 = "Object Amplitude", title2 = "Object Phase", cmap1 = "viridis", cmap2 = "viridis"):
+        
+        image1 = np.abs(self.hr_obj_image)
+        image2 = np.angle(self.hr_obj_image)
+    
+        plot_images_side_by_side(image1, image2, 
+                                 vmin1= vmin1, vmax1=vmax1, 
+                                 vmin2= vmin2, vmax2=vmax2, 
+                                 title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
+    
+    def plot_rec_fourier(self, 
+                         vmin1= None, vmax1=None, 
+                     vmin2= -np.pi, vmax2=np.pi, 
+                         title1 = "Fourier Amplitude", title2 = "Fourier Phase", cmap1 = "viridis", cmap2 = "viridis"):
+        
+        image1 = np.abs(self.hr_fourier_image)
+        image2 = np.angle(self.hr_fourier_image)
+    
+        plot_images_side_by_side(image1, image2, 
+                                 vmin1= vmin1, vmax1=vmax1, 
+                                 vmin2= vmin2, vmax2=vmax2, 
+                                 title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
+    
+    
+    def plot_pupil_func(self, 
+                        vmin1= None, vmax1=None, 
+                        vmin2= -np.pi, vmax2=np.pi, 
+                        title1 = "Pupil Amplitude", title2 = "Pupil Phase", cmap1 = "viridis", cmap2 = "viridis"):
+        
+        image1 = np.abs(self.pupil_func)
+        image2 = np.angle(self.pupil_func)
+    
+        plot_images_side_by_side(image1, image2, 
+                                 vmin1= vmin1, vmax1=vmax1, 
+                                 vmin2= vmin2, vmax2=vmax2, 
+                                 title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
 
 
 class EPRy_lr(EPRy):
