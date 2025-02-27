@@ -28,17 +28,21 @@ class EPRy:
         self.kout_vec = np.array(self.kout_vec)
         self.images = np.array(self.images)
         
-        bounds_x, bounds_y, dks = prepare_dims(self.images, self.kout_vec, self.lr_psize)
-        self.kx_min_n, self.kx_max_n = bounds_x
-        self.ky_min_n, self.ky_max_n = bounds_y
-        self.dkx, self.dky = dks
+        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.kout_vec, self.lr_psize)
+        self.kx_min_n, self.kx_max_n = self.bounds_x
+        self.ky_min_n, self.ky_max_n = self.bounds_y
+        self.dkx, self.dky = self.dks
         
         omegas = calc_obj_freq_bandwidth(self.lr_psize)
         self.omega_obj_x, self.omega_obj_y = omegas
         
+
+        self.initiate_recons_images()
+        
+    def initiate_recons_images(self):
         
         if self.hr_obj_image is None or self.hr_fourier_image is None:
-            self.hr_obj_image, self.hr_fourier_image = init_hr_image(bounds_x, bounds_y, dks)
+            self.hr_obj_image, self.hr_fourier_image = init_hr_image(self.bounds_x, self.bounds_y, self.dks)
 
         
     def iterate(self):
@@ -77,7 +81,46 @@ class EPRy:
         image_lr_update = np.sqrt(image) * np.exp(1j * np.angle(image_lr))
         image_FT_update = fftshift(fft2(ifftshift(image_lr_update)))
 
-        weight_fac_pupil = self.beta * self.compute_weight_fac(pupil_func_patch)
+        weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
 
         delta_lowres_ft = image_FT_update - image_FT
         self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += delta_lowres_ft *  weight_fac_pupil
+
+
+
+class EPRy_lr(EPRy):
+    
+    
+    def initiate_recons_images(self):
+        
+        if self.hr_obj_image or self.hr_fourier_image is None: 
+            self.hr_obj_image = np.zeros_like(self.images[0]).astype(complex)
+            self.hr_fourier_image = np.zeros_like(self.images[0]).astype(complex)
+            
+    def _update_spectrum(self, image, kx_iter, ky_iter, nx_lr, ny_lr):
+        
+        """Handles the Fourier domain update."""
+        kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
+        kx_lidx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx), 0))
+        kx_hidx = round(kx_cidx + self.omega_obj_x / (2 * self.dkx)) + (1 if nx_lr % 2 != 0 else 0)
+
+        ky_cidx = round((ky_iter - self.ky_min_n) / self.dky)
+        ky_lidx = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
+        ky_hidx = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if ny_lr % 2 != 0 else 0)
+
+        pupil_func_patch = self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
+        image_FT = self.hr_fourier_image * pupil_func_patch
+        
+        image_lr = fftshift(ifft2(ifftshift(image_FT)))
+        image_lr_update = np.sqrt(image) * np.exp(1j * np.angle(image_lr))
+        image_FT_update = fftshift(fft2(ifftshift(image_lr_update)))
+
+        weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
+
+        # Update fourier spectrum
+        delta_lowres_ft = image_FT_update - image_FT
+        self.hr_fourier_image += delta_lowres_ft *  weight_fac_pupil
+        
+        # Update Pupil Function 
+        weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image)
+        self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += weight_factor_obj * delta_lowres_ft

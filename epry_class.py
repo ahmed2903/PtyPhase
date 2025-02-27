@@ -37,7 +37,8 @@ class EPRy:
         self.omega_obj_x, self.omega_obj_y = omegas
         
 
-    
+        self.initiate_recons_images()
+        
     def initiate_recons_images(self):
         
         if self.hr_obj_image is None or self.hr_fourier_image is None:
@@ -92,9 +93,9 @@ class EPRy_lr(EPRy):
     
     def initiate_recons_images(self):
         
-        if hr_obj_image or hr_fourier_image is None: 
-            hr_obj_image = np.zeros_like(self.images[0]).astype(complex)
-            hr_fourier_image = np.zeros_like(self.images[0]).astype(complex)
+        if self.hr_obj_image or self.hr_fourier_image is None: 
+            self.hr_obj_image = np.zeros_like(self.images[0]).astype(complex)
+            self.hr_fourier_image = np.zeros_like(self.images[0]).astype(complex)
             
     def _update_spectrum(self, image, kx_iter, ky_iter, nx_lr, ny_lr):
         
@@ -118,7 +119,7 @@ class EPRy_lr(EPRy):
 
         # Update fourier spectrum
         delta_lowres_ft = image_FT_update - image_FT
-        self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += delta_lowres_ft *  weight_fac_pupil
+        self.hr_fourier_image += delta_lowres_ft *  weight_fac_pupil
         
         # Update Pupil Function 
         weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image)
