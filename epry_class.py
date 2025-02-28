@@ -58,7 +58,8 @@ class EPRy:
                 self._update_spectrum(image, kx_iter, ky_iter)
 
         self.hr_obj_image = fftshift(ifft2(ifftshift(self.hr_fourier_image)))
-        return self.hr_obj_image, self.hr_fourier_image, self.pupil_func
+        
+        #return self.hr_obj_image, self.hr_fourier_image, self.pupil_func
 
     def compute_weight_fac(self, func):
         """Compute weighting factor for phase retrieval update."""
