@@ -76,7 +76,7 @@ class EPRy:
         ky_cidx = round((ky_iter - self.ky_min_n) / self.dky)
         ky_lidx = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
         ky_hidx = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
-
+        
         pupil_func_patch = self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
         image_FT = self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx] * pupil_func_patch
         image_FT *= self.nx_lr/self.nx_hr
@@ -153,7 +153,7 @@ class EPRy_lr(EPRy):
         ky_cidx = round((ky_iter - self.ky_min_n) / self.dky)
         ky_lidx = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
         ky_hidx = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
-
+        
         pupil_func_patch = self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
         image_FT = self.hr_fourier_image * pupil_func_patch
         image_FT *= self.nx_lr/self.nx_hr 
