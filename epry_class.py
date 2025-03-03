@@ -143,8 +143,6 @@ class EPRy_lr(EPRy):
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
 
-        
-        print(self.images.shape)
     def _update_spectrum(self, image, kx_iter, ky_iter):
         
         """Handles the Fourier domain update."""
@@ -165,11 +163,7 @@ class EPRy_lr(EPRy):
         image_FT_update = fftshift(fft2(ifftshift(image_lr_update)))
         image_lr_update *= self.nx_hr/self.nx_lr
 
-        
         weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
-        #mod_pupil = np.abs(pupil_func_patch)**2  
-        #weight_fac_pupil = np.conjugate(pupil_func_patch) / (mod_pupil.max() + 1e-23)
-        #weight_fac_pupil *= self.alpha
         
         # Update fourier spectrum
         delta_lowres_ft = image_FT_update - image_FT
@@ -177,12 +171,7 @@ class EPRy_lr(EPRy):
         
         # Update Pupil Function 
         weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image)
-        #mod_obj = np.abs(self.hr_fourier_image)**2
-        #weight_factor_obj = np.conjugate(self.hr_fourier_image) / (mod_obj.max() + 1e-23)
-        #weight_factor_obj *= self.beta 
-        
-        #print(mod_pupil.max())
-        #print(mod_obj.max())
+
         
         self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += weight_factor_obj * delta_lowres_ft
 
