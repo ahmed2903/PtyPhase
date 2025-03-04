@@ -159,6 +159,7 @@ class EPRy_lr(EPRy):
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
 
     def _update_spectrum(self, image, kx_iter, ky_iter):
+        
         """Handles the Fourier domain update."""
         kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
         kx_lidx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx), 0))
@@ -170,14 +171,15 @@ class EPRy_lr(EPRy):
         
         pupil_func_patch = self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
         image_FT = self.hr_fourier_image * pupil_func_patch
-        image_FT *= self.nx_lr/self.nx_hr 
+        #image_FT *= self.nx_lr/self.nx_hr 
         
         image_lr = fftshift(ifft2(ifftshift(image_FT)))
         image_lr_update = np.sqrt(image) * np.exp(1j * np.angle(image_lr))
         image_FT_update = fftshift(fft2(ifftshift(image_lr_update)))
-        image_lr_update *= self.nx_hr/self.nx_lr
+        #image_lr_update *= self.nx_hr/self.nx_lr
 
         weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
+        weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image)
         
         # Update fourier spectrum
         delta_lowres_ft = image_FT_update - image_FT
@@ -187,7 +189,6 @@ class EPRy_lr(EPRy):
             raise ValueError("There is a Nan value, check the configurations ")
             
         # Update Pupil Function 
-        weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image)
         self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += weight_factor_obj * delta_lowres_ft
 
 
