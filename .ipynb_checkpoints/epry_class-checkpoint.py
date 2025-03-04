@@ -67,10 +67,10 @@ class EPRy:
                 
                 self._update_spectrum(image, kx_iter, ky_iter)
 
-                if live_plot:
-                    # Update the HR object image after all spectrum updates in this iteration
-                    self.hr_obj_image = fftshift(ifft2(ifftshift(self.hr_fourier_image)))
-                    update_live_plot(img_amp, img_phase, self.hr_obj_image, fig)
+            if live_plot:
+                # Update the HR object image after all spectrum updates in this iteration
+                self.hr_obj_image = fftshift(ifft2(ifftshift(self.hr_fourier_image)))
+                update_live_plot(img_amp, img_phase, self.hr_obj_image, fig)
             
         
         self.hr_obj_image = fftshift(ifft2(ifftshift(self.hr_fourier_image)))
