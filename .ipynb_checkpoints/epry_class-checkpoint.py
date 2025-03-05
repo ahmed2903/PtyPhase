@@ -63,7 +63,8 @@ class EPRy:
         
         for it in range(self.num_iter):
             print(f"Iteration {it+1}/{self.num_iter}")
-            for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]),desc="Processing", total=len(self.images), unit="images")):
+            for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]), 
+                                                               desc="Processing", total=len(self.images), unit="images")):
                 
                 self._update_spectrum(image, kx_iter, ky_iter)
 
