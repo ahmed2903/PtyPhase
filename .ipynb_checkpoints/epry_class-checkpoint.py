@@ -27,10 +27,13 @@ class EPRy:
         
 
 
-    def prepare(self):
+    def prepare(self, **kwargs):
+        
+        
+        if 'zoom_factor' in kwargs:
+            self.zoom_factor = kwargs['zoom_factor']
         
         self._prep_images()
-
         self.kout_vec = np.array(self.kout_vec)
         self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.kout_vec, self.lr_psize)
         self.kx_min_n, self.kx_max_n = self.bounds_x
@@ -50,16 +53,15 @@ class EPRy:
     def _load_pupil(self):
         
         dims = round((self.kx_max_n - self.kx_min_n)/self.dkx), round((self.ky_max_n - self.ky_min_n)/self.dky)
-        phase = downsample_array(phase, dims)
-        self.pupil_func = np.exp(1j*phase)
-        
-        if isinstance(self.pupil_func, str):
-            self.pupil_func = np.load(self.pupil_func)
-        elif isinstance(self.pupil_func, np.ndarray):
-            self.pupil_func = self.pupil_func
-        else:
-            self.pupil_func = np.zeros(dims)
 
+        if isinstance(self.pupil_func, str):
+            phase = np.load(self.pupil_func)
+        elif isinstance(self.pupil_func, np.ndarray):
+            phase = self.pupil_func
+        else:
+            phase = np.zeros(dims)
+
+        phase = downsample_array(phase, dims)
         self.pupil_func = np.exp(1j*phase)
     
     def _initiate_recons_images(self):
@@ -211,9 +213,12 @@ class EPRy_upsample(EPRy):
     def _prep_images(self):
         
         self.lr_psize = self.lr_psize /2 
+        try:
+            self.images = upsample_images(self.images, self.zoom_factor, n_jobs = 32)
 
-        self.images = upsample_images(self.images, zoom_factor, n_jobs = 32)
-
+        except: 
+            print("Zoom factor not passed, default is 2.")
+            self.images = upsample_images(self.images, zoom_factor=2, n_jobs = 32)
         self.images = np.array(self.images)
 
         
