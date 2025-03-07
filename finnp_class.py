@@ -50,17 +50,13 @@ class ForwardModel(nn.Module):
 class FINN:
     
     def __init__(self, images, 
-                 pupil_func: str, 
                  kout_vec, 
-                 optimiser,
                  lr_psize, 
                  num_epochs=50):
         
         self.images = images
-        self.pupil_func = pupil_func
         self.kout_vec = kout_vec
         self.lr_psize = lr_psize
-        self.optimiser = optimiser
         self.num_epochs = num_epochs
         
 
@@ -79,9 +75,23 @@ class FINN:
         self.pupil_dims = round((self.kx_max_n - self.kx_min_n)/self.dkx), round((self.ky_max_n - self.ky_min_n)/self.dky)
         
         self.omega_obj_x, self.omega_obj_y  = calc_obj_freq_bandwidth(self.lr_psize)
-
+        
         self.set_device(device=device)
-        self.set_model(model, )
+        self.model = model(spectrum_size = self.image_dims, pupil_size = self.pupil_dims).to(self.device)
+        if self.device.type == "cuda":
+            cuda_device_count = torch.cuda.device_count()
+            if cuda_device_count > 1:
+                self.cuda_device_count = cuda_device_count
+                self.model = nn.DataParallel(self.model)
+                self.model.to(self.device)
+            print('Using %s'%torch.cuda.get_device_name(0))
+        else:
+            print('Using %s'%self.device.type)
+
+        self.model = self.model.float()
+        
+        #self.set_model(model, spectrum_size = self.image_dims, pupil_size = self.pupil_dims)
+        
         #self._load_pupil()
 
 
@@ -89,6 +99,7 @@ class FINN:
 
         self.images = np.array(self.images)
         self.image_dims = self.images[0].shape
+        self.nx_lr, self.ny_lr = self.image_dims
         
         # Ensure target_image is a tensor and has the same size as reconstructed_image
         if not isinstance(self.images, torch.Tensor):
@@ -177,7 +188,7 @@ class FINN:
     def iterate(self):
 
         for epoch in range(self.num_epochs):
-            self.optimizer.zero_grad()
+            self.optimiser.zero_grad()
             self.epoch_loss = 0
             
             for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]), 
@@ -187,7 +198,7 @@ class FINN:
 
             # Backpropagation
             self.epoch_loss.backward()
-            self.optimizer.step()
+            self.optimiser.step()
 
             # Logging
             if epoch % 5 == 0:
@@ -220,9 +231,9 @@ class FINN:
         spectrum_pha = self.model.spectrum_pha.detach()
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_spectrum = self.recon_fourier_img.cpu().numpy()
+        self.recon_spectrum = self.recon_spectrum.cpu().numpy()
         
-        self.recon_obj = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(self.recon_fourier_img)))
+        self.recon_obj = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(self.recon_spectrum)))
         
         pupil_amp = self.model.pupil_amp.detach()  # Detach from computation graph
         pupil_pha = self.model.pupil_pha.detach()
