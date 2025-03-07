@@ -41,37 +41,6 @@ class FourierPtychographyNet(nn.Module):
         return low_res_image
     
     
-# Define loss function and optimizer
-def train_fourier_ptychography(target_image, num_epochs=500, lr=0.01):
-    img_size = target_image.shape[-1]
-    
-    # Model instance
-    model = FourierPtychographyNet(img_size)
-    
-    # L2 Loss Function
-    loss_fn = nn.MSELoss()
-    
-    # Nesterov-accelerated Gradient Descent (NAG)
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, nesterov=True)
-    
-    for epoch in range(num_epochs):
-        optimizer.zero_grad()
-        
-        # Forward pass
-        reconstructed_image = model()
-        
-        # Compute loss
-        loss = loss_fn(reconstructed_image, target_image)
-        
-        # Backpropagation
-        loss.backward()
-        optimizer.step()
-        
-        # Logging
-        if epoch % 50 == 0:
-            print(f"Epoch [{epoch}/{num_epochs}], Loss: {loss.item():.6f}")
-
-    return model
 
 def train_fourier_ptychography(model, target_images, CTFs, num_epochs=500, lr=0.01):
     """
