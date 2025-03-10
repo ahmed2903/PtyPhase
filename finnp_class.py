@@ -30,7 +30,7 @@ class ForwardModel(nn.Module):
         self.ctf = torch.ones(pupil_size[0]//2, pupil_size[1]//2, dtype=torch.float32)
         
         # Pad the CTF with zeros to match size of pupil
-        pad = ( pupil_size[1]//4, pupil_size[1]//4, pupil_size[0]//4, pupil_size[0]//4)
+        pad = (pupil_size[1]//4, pupil_size[1]//4, pupil_size[0]//4, pupil_size[0]//4)
         self.ctf = F.pad(self.ctf, pad, "constant", 0)
 
     def forward(self, bounds):
