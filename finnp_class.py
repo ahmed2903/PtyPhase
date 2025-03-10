@@ -41,12 +41,12 @@ class ForwardModel(nn.Module):
         # Create complex spectrum and pupil from real and imaginary parts
         spectrum = self.spectrum_amp * torch.exp(1j * self.spectrum_pha)
         
-        pupil = self.pupil_amp * torch.exp(1j * self.pupil_pha)        
+        
+        pupil = (self.pupil_amp * self.ctf) * torch.exp(1j * self.pupil_pha * self.ctf)       
 
         pupil_patch = pupil.clone()
         
         sx,ex,sy,ey = bounds[0][0], bounds[0][1], bounds[1][0], bounds[1][1]
-        #pupil_patch = pupil_patch[sx:ex,sy:ey]
 
         pupil_patch = pupil.index_select(0, torch.arange(sx, ex, device=pupil.device))
         pupil_patch = pupil_patch.index_select(1, torch.arange(sy, ey, device=pupil.device))
