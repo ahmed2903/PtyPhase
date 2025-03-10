@@ -13,7 +13,7 @@ from ..plotting_fs import plot_images_side_by_side, update_live_plot, initialize
 from ..data_fs import * #downsample_array, upsample_images, pad_to_double
 
 class ForwardModel(nn.Module):
-    def __init__(self, spectrum_size, pupil_size, Na2 = False):
+    def __init__(self, spectrum_size, pupil_size):
         super(ForwardModel, self).__init__()
         
         self.spectrum_size = spectrum_size
@@ -23,18 +23,15 @@ class ForwardModel(nn.Module):
         self.spectrum_amp = nn.Parameter(torch.ones(spectrum_size[0], spectrum_size[1], dtype=torch.float32))
         self.spectrum_pha = nn.Parameter(torch.zeros(spectrum_size[0], spectrum_size[1], dtype=torch.float32))
         
-        # Expands the pupil size to 2N
-        if Na2:
-            size_factor = 2
-        self.pupil_amp = nn.Parameter(torch.ones(pupil_size[0]*size_factor, pupil_size[1]*size_factor, dtype=torch.float32))
-        self.pupil_pha = nn.Parameter(torch.zeros(pupil_size[0]*size_factor, pupil_size[1]*size_factor, dtype=torch.float32))
+
+        self.pupil_amp = nn.Parameter(torch.ones(pupil_size[0], pupil_size[1], dtype=torch.float32))
+        self.pupil_pha = nn.Parameter(torch.zeros(pupil_size[0], pupil_size[1], dtype=torch.float32))
         
-        self.ctf = torch.ones(pupil_size[0], pupil_size[1], dtype=torch.float32)
+        self.ctf = torch.ones(pupil_size[0]//2, pupil_size[1]//2, dtype=torch.float32)
         
         # Pad the CTF with zeros to match size of pupil
-        if Na2:
-            pad = ( pupil_size[1]//2, pupil_size[1]//2, pupil_size[0]//2, pupil_size[0]//2)
-            self.ctf = F.pad(self.ctf, pad, "constant", 0)
+        pad = ( pupil_size[1]//4, pupil_size[1]//4, pupil_size[0]//4, pupil_size[0]//4)
+        self.ctf = F.pad(self.ctf, pad, "constant", 0)
 
     def forward(self, bounds):
         """ Forward propagation: reconstruct low-resolution complex field """
@@ -82,7 +79,7 @@ class FINN:
         self._prep_images()
         
         self.kout_vec = np.array(self.kout_vec)
-        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.kout_vec, self.lr_psize)
+        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.kout_vec, self.lr_psize, extend_to_double = double_pupil)
         self.kx_min_n, self.kx_max_n = self.bounds_x
         self.ky_min_n, self.ky_max_n = self.bounds_y
         self.dkx, self.dky = self.dks
@@ -92,7 +89,7 @@ class FINN:
         self.omega_obj_x, self.omega_obj_y  = calc_obj_freq_bandwidth(self.lr_psize)
 
         self.set_device(device=device)
-        self.model = model(spectrum_size = self.image_dims, pupil_size = self.pupil_dims, Na2 = double_pupil).to(self.device)
+        self.model = model(spectrum_size = self.image_dims, pupil_size = self.pupil_dims).to(self.device)
         
         if self.device.type == "cuda":
             cuda_device_count = torch.cuda.device_count()
