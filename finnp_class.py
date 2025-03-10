@@ -34,15 +34,20 @@ class ForwardModel(nn.Module):
         spectrum = self.spectrum_amp * torch.exp(1j * self.spectrum_pha)
         
         pupil = self.pupil_amp * torch.exp(1j * self.pupil_pha)        
+
+        pupil_patch = pupil.clone()
         
         sx,ex,sy,ey = bounds[0][0], bounds[0][1], bounds[1][0], bounds[1][1]
-        pupil = pupil[sx:ex,sy:ey]
-        
+        #pupil_patch = pupil_patch[sx:ex,sy:ey]
+
+        pupil_patch = pupil.index_select(0, torch.arange(sx, ex, device=pupil.device))
+        pupil_patch = pupil_patch.index_select(1, torch.arange(sy, ey, device=pupil.device))
+
         # Apply pupil function (acting as a low-pass filter)
-        filtered_spectrum = spectrum * pupil
+        forward_spectrum = spectrum * pupil_patch
 
         # Inverse Fourier Transform to reconstruct low-resolution image
-        low_res_image = fft.fftshift(fft.ifft2(fft.ifftshift(filtered_spectrum)))
+        low_res_image = fft.fftshift(fft.ifft2(fft.ifftshift(forward_spectrum)))
         
         return low_res_image
     
@@ -58,6 +63,8 @@ class FINN:
         self.kout_vec = kout_vec
         self.lr_psize = lr_psize
         self.num_epochs = num_epochs
+
+        self.losses = []
         
 
 
@@ -89,7 +96,8 @@ class FINN:
             print('Using %s'%self.device.type)
 
         self.model = self.model.float()
-        
+
+
         #self.set_model(model, spectrum_size = self.image_dims, pupil_size = self.pupil_dims)
         
         #self._load_pupil()
@@ -105,9 +113,9 @@ class FINN:
         if not isinstance(self.images, torch.Tensor):
             self.images = torch.tensor(self.images, dtype=torch.float32)
         
-        # If target_image is not complex, convert it to complex
-        if not self.images.is_complex():
-            self.images = self.images.to(dtype=torch.complex64)
+        # # If target_image is not complex, convert it to complex
+        # if not self.images.is_complex():
+        #     self.images = self.images.to(dtype=torch.complex64)
             
             
         
@@ -186,11 +194,13 @@ class FINN:
         self.loss_fn = loss_func(**func_args)
         
     def iterate(self):
-
+        
         for epoch in range(self.num_epochs):
             self.optimiser.zero_grad()
             self.epoch_loss = 0
             
+            
+        
             for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]), 
                                                                desc="Processing", total=len(self.images), unit="images")):
                 
@@ -201,9 +211,11 @@ class FINN:
             self.optimiser.step()
 
             # Logging
-            if epoch % 5 == 0:
+            if epoch % 10 == 0:
                 print(f"Epoch [{epoch}/{self.num_epochs}], Loss: {self.epoch_loss.item():.6f}")
-        
+
+            self.losses.append(self.epoch_loss.detach().numpy())
+            
         self.post_process()
         
     def _update_spectrum(self, image, kx_iter, ky_iter):
@@ -220,6 +232,11 @@ class FINN:
         bounds = [[kx_lidx, kx_hidx], [ky_lidx, ky_hidx]]
                 
         reconstructed_image = self.model(bounds)
+
+        #reconstructed_image *= (torch.sum(torch.sqrt(image))/ torch.sum(reconstructed_image) )
+        image = torch.sqrt(image)
+        
+        image *= (1/torch.max(torch.abs(image)))
         
         loss = self.loss_fn(torch.abs(reconstructed_image), torch.abs(image))
         
