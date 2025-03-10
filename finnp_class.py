@@ -76,7 +76,7 @@ class FINN:
         
 
 
-    def prepare(self, model, device = "cpu"):
+    def prepare(self, model, double_pupil = False, device = "cpu"):
 
 
         self._prep_images()
@@ -90,9 +90,9 @@ class FINN:
         self.pupil_dims = round((self.kx_max_n - self.kx_min_n)/self.dkx), round((self.ky_max_n - self.ky_min_n)/self.dky)
         self.pupil_dims = make_dims_even(self.pupil_dims)
         self.omega_obj_x, self.omega_obj_y  = calc_obj_freq_bandwidth(self.lr_psize)
-        
+
         self.set_device(device=device)
-        self.model = model(spectrum_size = self.image_dims, pupil_size = self.pupil_dims).to(self.device)
+        self.model = model(spectrum_size = self.image_dims, pupil_size = self.pupil_dims, Na2 = double_pupil).to(self.device)
         
         if self.device.type == "cuda":
             cuda_device_count = torch.cuda.device_count()
