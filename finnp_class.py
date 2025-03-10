@@ -6,22 +6,25 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.fft as fft
 import torch.nn.functional as F 
+from torch.nn.utils import clip_grad_norm_
 import inspect
+from torch.autograd import Variable
 
 from ..utils_pr import *
 from ..plotting_fs import plot_images_side_by_side, update_live_plot, initialize_live_plot
 from ..data_fs import * #downsample_array, upsample_images, pad_to_double
 
 class ForwardModel(nn.Module):
-    def __init__(self, spectrum_size, pupil_size):
+    def __init__(self, spectrum_size, pupil_size, band_multiplier):
         super(ForwardModel, self).__init__()
         
         self.spectrum_size = spectrum_size
         self.pupil_size = pupil_size
+        self.band_multiplier = band_multiplier
 
         # Initial guess: upsampled low-resolution image spectrum
-        self.spectrum_amp = nn.Parameter(torch.ones(spectrum_size[0], spectrum_size[1], dtype=torch.float32))
-        self.spectrum_pha = nn.Parameter(torch.zeros(spectrum_size[0], spectrum_size[1], dtype=torch.float32))
+        self.spectrum_amp = nn.Parameter(torch.normal(1,1,(spectrum_size[0]*self.band_multiplier, spectrum_size[1]*self.band_multiplier), dtype=torch.float32))
+        self.spectrum_pha = nn.Parameter(torch.zeros(spectrum_size[0]*self.band_multiplier, spectrum_size[1]*self.band_multiplier, dtype=torch.float32))
         
 
         self.pupil_amp = nn.Parameter(torch.ones(pupil_size[0], pupil_size[1], dtype=torch.float32))
@@ -34,16 +37,16 @@ class ForwardModel(nn.Module):
         # Pad the CTF with zeros to match size of pupil
         # pad = (pupil_size[1]//4, pupil_size[1]//4, pupil_size[0]//4, pupil_size[0]//4)
         # self.ctf = F.pad(self.ctf, pad, "constant", 0)
+        
+        self.max_pool = nn.AvgPool2d(kernel_size=self.band_multiplier) #, divisor_override=1)
+        
 
     def forward(self, bounds):
         """ Forward propagation: reconstruct low-resolution complex field """
         # Create complex spectrum and pupil from real and imaginary parts
         spectrum = self.spectrum_amp * torch.exp(1j * self.spectrum_pha)
         
-        
         pupil = (self.pupil_amp * self.ctf) * torch.exp(1j * self.pupil_pha * self.ctf)       
-
-        pupil_patch = pupil.clone()
         
         sx,ex,sy,ey = bounds[0][0], bounds[0][1], bounds[1][0], bounds[1][1]
 
@@ -55,6 +58,14 @@ class ForwardModel(nn.Module):
 
         # Inverse Fourier Transform to reconstruct low-resolution image
         low_res_image = fft.fftshift(fft.ifft2(fft.ifftshift(forward_spectrum)))
+
+        low_res_amp = torch.abs(low_res_image)
+        low_res_pha = torch.angle(low_res_image)
+
+        low_res_amp = self.max_pool(low_res_amp.unsqueeze(0)).squeeze(0)
+        low_res_pha = self.max_pool(low_res_pha.unsqueeze(0)).squeeze(0)
+
+        low_res_image = low_res_amp * torch.exp(1j*low_res_pha)
         
         return low_res_image
     
@@ -64,22 +75,21 @@ class FINN:
     def __init__(self, images, 
                  kout_vec, 
                  lr_psize, 
-                 num_epochs=50):
+                 band_multiplier=1):
         
         self.images = images
         self.kout_vec = kout_vec
         self.lr_psize = lr_psize
-        self.num_epochs = num_epochs
-
+        self.band_multiplier = band_multiplier
         self.losses = []
         
 
 
-    def prepare(self, model, double_pupil = False, device = "cpu"):
+    def prepare(self, model,  double_pupil = False, device = "cpu"):
 
-
-        self._prep_images()
         
+        
+        self._prep_images()
         self.kout_vec = np.array(self.kout_vec)
         self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.kout_vec, lr_psize = self.lr_psize, extend_to_double = double_pupil)
         self.kx_min_n, self.kx_max_n = self.bounds_x
@@ -91,7 +101,7 @@ class FINN:
         self.omega_obj_x, self.omega_obj_y  = calc_obj_freq_bandwidth(self.lr_psize)
 
         self.set_device(device=device)
-        self.model = model(spectrum_size = self.image_dims, pupil_size = self.pupil_dims).to(self.device)
+        self.model = model(spectrum_size = self.image_dims, pupil_size = self.pupil_dims, band_multiplier = self.band_multiplier).to(self.device)
         
         if self.device.type == "cuda":
             cuda_device_count = torch.cuda.device_count()
@@ -142,7 +152,16 @@ class FINN:
         # self.pupil_func = np.exp(1j*phase)
         
 
-        
+    def set_device(self, device='cpu'):
+        """
+        Sets the device to either CPU ('cpu') or GPU ('cuda'), if available.
+        """
+        if torch.cuda.is_available() and device == 'cuda':
+            torch.cuda.empty_cache()
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+            
     def GetKwArgs(self, obj, kwargs):
         obj_sigs = []
         obj_args = {}
@@ -154,7 +173,7 @@ class FINN:
                 obj_args[key] = value
         return obj_args
 
-    def set_optimiser(self, optimiser, **kwargs):
+    def set_spectrum_optimiser(self, optimiser, **kwargs):
         """
         Add an optimiser. Must occur before 
         corresponding AddScheduler. 
@@ -164,90 +183,93 @@ class FINN:
         if not "lr" in optimiser_args:
             raise ValueError("Learning rate must be passed")
         
-        self.optimiser = optimiser(self.model.parameters(), **optimiser_args)
-    
-    def set_device(self, device='cpu'):
-        """
-        Sets the device to either CPU ('cpu') or GPU ('cuda'), if available.
-        """
-        if torch.cuda.is_available() and device == 'cuda':
-            torch.cuda.empty_cache()
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device("cpu")
-   
-    def set_model(self, model, **kwargs):
-        """
-        Selecting the model to be used for the network.
-        Keywords are passed to model if they exist in the model.
-        """
-        model_args = self.GetKwArgs(model, kwargs)
-        
-        self.model = model(**model_args).to(self.device)
-        if self.device.type == "cuda":
-            cuda_device_count = torch.cuda.device_count()
-            if cuda_device_count > 1:
-                self.cuda_device_count = cuda_device_count
-                self.model = nn.DataParallel(self.model)
-                self.model.to(self.device)
-            print('Using %s'%torch.cuda.get_device_name(0))
-        else:
-            print('Using %s'%self.device.type)
+        self.spectrum_optimiser = optimiser([self.model.spectrum_amp, self.model.spectrum_pha], **optimiser_args)
 
-        self.model = self.model.float()
-    
+    def set_pupil_optimiser(self, optimiser, **kwargs):
+        """
+        Add an optimiser. Must occur before 
+        corresponding AddScheduler. 
+        Specify key words for optimiser.
+        """
+        optimiser_args = self.GetKwArgs(optimiser, kwargs)
+        if not "lr" in optimiser_args:
+            raise ValueError("Learning rate must be passed")
+        
+        self.pupil_optimiser = optimiser([self.model.pupil_amp, self.model.pupil_pha], **optimiser_args)
+         
     def set_loss_func(self, loss_func, **kwargs):
         
         func_args = self.GetKwArgs(loss_func, kwargs)
         self.loss_fn = loss_func(**func_args)
         
-    def iterate(self):
-        
+    def iterate(self, epochs, flag = 5):
+        self.num_epochs = epochs
+
+        current_optimizer = self.spectrum_optimiser
+        epochs_since_switch = 0  # Counter to track epochs since last switch
+
+        # Create separate optimizers for spectrum and pupil
         for epoch in range(self.num_epochs):
-            self.optimiser.zero_grad()
+            
+            current_optimizer.zero_grad()
+
             self.epoch_loss = 0
-            
-            
         
             for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]), 
                                                                desc="Processing", total=len(self.images), unit="images")):
                 
                 self._update_spectrum(image, kx_iter, ky_iter)
-
+                
             # Backpropagation
             self.epoch_loss.backward()
-            self.optimiser.step()
-
+            clip_grad_norm_(self.model.parameters(), max_norm = 100, norm_type=2)
+            current_optimizer.step()
+            # update switch counter
+            epochs_since_switch += 1
+            
+            if epochs_since_switch >= flag:
+                if current_optimizer == self.spectrum_optimiser:
+                    current_optimizer = self.pupil_optimiser
+                else:
+                    current_optimizer = self.spectrum_optimiser
+                
+                epochs_since_switch = 0  # Reset the counter
+            
             # Logging
-            if epoch % 10 == 0:
+            if epoch % flag == 0:
                 print(f"Epoch [{epoch}/{self.num_epochs}], Loss: {self.epoch_loss.item():.6f}")
-
+            
             self.losses.append(self.epoch_loss.detach().numpy())
             
         self.post_process()
         
     def _update_spectrum(self, image, kx_iter, ky_iter):
         
+        #image = Variable(image).to(self.device)
+        
         """Handles the Fourier domain update."""
         kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
-        kx_lidx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx), 0))
-        kx_hidx = round(kx_cidx + self.omega_obj_x / (2 * self.dkx)) + (1 if self.nx_lr % 2 != 0 else 0)
+        kx_lidx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx) * self.band_multiplier, 0))
+        kx_hidx = round(kx_cidx + self.omega_obj_x / (2 * self.dkx) *self.band_multiplier) + (1 if self.nx_lr % 2 != 0 else 0)
 
         ky_cidx = round((ky_iter - self.ky_min_n) / self.dky)
-        ky_lidx = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
-        ky_hidx = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
+        ky_lidx = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky) *self.band_multiplier, 0))
+        ky_hidx = round(ky_cidx + self.omega_obj_y / (2 * self.dky) *self.band_multiplier) + (1 if self.ny_lr % 2 != 0 else 0)
         
         bounds = [[kx_lidx, kx_hidx], [ky_lidx, ky_hidx]]
-                
         reconstructed_image = self.model(bounds)
 
-        #reconstructed_image *= (torch.sum(torch.sqrt(image))/ torch.sum(reconstructed_image) )
+        #tmp = reconstructed_image.detach().clone()
+        #scale = (torch.sum(torch.sqrt(torch.abs(image)))/ torch.sum(torch.abs(reconstructed_image) ))
+        #tmp *= scale
         
         #image = torch.sqrt(image)
-        #image *= (1/torch.max(torch.abs(image)))
+        #image *= (1/torch.sum(torch.abs(image)))
         
         loss = self.loss_fn(torch.abs(reconstructed_image), torch.sqrt(torch.abs(image)))
-        
+        if torch.isnan(loss):
+            raise ValueError("There is a Nan value, check the configurations ")
+            
         self.epoch_loss += loss  # Accumulate loss
 
     def post_process(self):
@@ -265,6 +287,8 @@ class FINN:
 
         self.pupil_func = pupil_amp * torch.exp(1j * pupil_pha)
         self.pupil_func = self.pupil_func.cpu().numpy()
+
+        self.ctf = self.model.ctf.detach().cpu().numpy  # Detach from computation graph
 
     def plot_rec_obj(self, 
                      vmin1= None, vmax1=None, 
@@ -305,6 +329,12 @@ class FINN:
                                  vmin1= vmin1, vmax1=vmax1, 
                                  vmin2= vmin2, vmax2=vmax2, 
                                  title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
+
+    def plot_ctf(self, 
+                        vmin1= None, vmax1=None, 
+                        title1 = "CTF", cmap1 = "viridis"):
+    
+        plot_roi_from_numpy(self.ctf, name=title, vmin1=vmin1, vmax1=vmax1)
 
 
     def plot_loss(self):
