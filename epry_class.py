@@ -38,7 +38,7 @@ class EPRy:
         self._prep_images()
         
         self.kout_vec = np.array(self.kout_vec)
-        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.kout_vec, self.lr_psize)
+        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.kout_vec, self.lr_psize, extend_to_double = False)
         self.kx_min_n, self.kx_max_n = self.bounds_x
         self.ky_min_n, self.ky_max_n = self.bounds_y
         self.dkx, self.dky = self.dks
