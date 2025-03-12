@@ -1,6 +1,6 @@
 import numpy as np 
 import matplotlib.pyplot as plt
-
+import h5py
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 import inspect
 from torch.autograd import Variable
+from IPython.display import display, clear_output
 
 from ..utils_pr import *
 from ..plotting_fs import plot_images_side_by_side, update_live_plot, initialize_live_plot
@@ -82,7 +83,7 @@ class FINN:
         self.lr_psize = lr_psize
         self.band_multiplier = band_multiplier
         self.losses = []
-        
+        self.epochs_passed = 0
 
 
     def prepare(self, model,  double_pupil = False, device = "cpu"):
@@ -99,7 +100,7 @@ class FINN:
         self.pupil_dims = round((self.kx_max_n - self.kx_min_n)/self.dkx), round((self.ky_max_n - self.ky_min_n)/self.dky)
         self.pupil_dims = make_dims_even(self.pupil_dims)
         self.omega_obj_x, self.omega_obj_y  = calc_obj_freq_bandwidth(self.lr_psize)
-
+        
         self.set_device(device=device)
         self.model = model(spectrum_size = self.image_dims, pupil_size = self.pupil_dims, band_multiplier = self.band_multiplier).to(self.device)
         
@@ -185,7 +186,7 @@ class FINN:
         
         self.spectrum_optimiser = optimiser([self.model.spectrum_amp, self.model.spectrum_pha], **optimiser_args)
 
-    def set_pupil_optimiser(self, optimiser, **kwargs):
+    def set_pupil_optimiser(self, optimiser, freeze_pupil_amp = False, **kwargs):
         """
         Add an optimiser. Must occur before 
         corresponding AddScheduler. 
@@ -194,54 +195,162 @@ class FINN:
         optimiser_args = self.GetKwArgs(optimiser, kwargs)
         if not "lr" in optimiser_args:
             raise ValueError("Learning rate must be passed")
-        
-        self.pupil_optimiser = optimiser([self.model.pupil_amp, self.model.pupil_pha], **optimiser_args)
+
+        if freeze_pupil_amp:
+            self.pupil_optimiser = optimiser([self.model.pupil_pha], **optimiser_args)
+        else:
+            self.pupil_optimiser = optimiser([self.model.pupil_amp, self.model.pupil_pha], **optimiser_args)
          
     def set_loss_func(self, loss_func, **kwargs):
         
         func_args = self.GetKwArgs(loss_func, kwargs)
         self.loss_fn = loss_func(**func_args)
-        
-    def iterate(self, epochs, flag = 5):
-        self.num_epochs = epochs
 
+    def tv_regularization(self, image):
+        """
+        Compute the Total Variation (TV) regularization term
+    
+        Args:
+        images (torch.Tensor): A 4D tensor of shape (batch_size, channels, height, width).
+    
+        Returns:
+        torch.Tensor: The TV regularization term for each image in the batch (shape: (batch_size,)).
+        """
+        # Compute gradients in x and y directions
+        gradient_x = torch.abs(torch.roll(image, shifts=-1, dims=1) - image)
+        #gradient_x = gradient_x[:, :-1]  # Remove the last column (invalid due to roll)
+        gradient_y = torch.abs(torch.roll(image, shifts=-1, dims=0) - image)
+        #gradient_y = gradient_y[:-1, :]  # Remove the last row (invalid due to roll)
+    
+        # Compute the TV regularization term for each image
+        tv = torch.sum(torch.sqrt(gradient_x**2 + gradient_y**2))
+        
+        return tv
+
+
+    def set_alpha_scheduler(self, alpha_flag, alpha_init, alpha_steps, gamma):
+        """
+        Initialize the alpha scheduler.
+    
+        Args:
+            n_epochs (int): Number of epochs to keep alpha = 0.
+            alpha_init (float): Initial value of alpha after n_epochs.
+            m_epochs (int): Frequency of updating alpha (every m epochs).
+            gamma (float): Multiplicative factor for alpha.
+    
+        Returns:
+            dict: A dictionary containing the scheduler parameters and state.
+        """
+        self.alpha = 0.0
+        self.alpha_init = alpha_init
+        self.alpha_flag = alpha_flag
+        self.alpha_steps = alpha_steps
+        self.gamma = gamma
+    
+    def update_alpha(self, epoch):
+        """
+        Update alpha based on the current epoch.
+    
+        Args:
+            scheduler (dict): The scheduler dictionary returned by `set_alpha_scheduler`.
+            epoch (int): Current epoch number.
+    
+        Returns:
+            float: Updated value of alpha.
+        """
+        if epoch < self.alpha_flag:
+            # First n epochs: alpha = 0
+            self.alpha = 0.0
+        elif epoch == self.alpha_flag:
+            # After n epochs: set alpha to alpha_init
+            self.alpha = self.alpha_init
+            self.last_alpha_update = epoch
+        elif (epoch > self.alpha_flag) and (
+            (epoch - self.last_alpha_update) >= self.alpha_steps
+        ):
+            # Every m epochs after n_epochs: multiply alpha by gamma
+            self.alpha *= self.gamma
+            self.last_alpha_update = epoch
+    
+        
+    def iterate(self, epochs, optim_flag = 5, live_flag = None):
+            
+        self.num_epochs = epochs
+        self.last_alpha_update = self.num_epochs
+
+        # Create separate optimizers for spectrum and pupil
         current_optimizer = self.spectrum_optimiser
         epochs_since_switch = 0  # Counter to track epochs since last switch
 
-        # Create separate optimizers for spectrum and pupil
-        for epoch in range(self.num_epochs):
+        if live_flag is not None:
+            # plotting live loss
+            plt.ion()
+            fig, ax = plt.subplots()
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Loss")
+            ax.set_title("Live Loss Plot")
+            line, = ax.plot([],[])
+            plt.tight_layout()
+            plt.ion()
+            plt.show()
+        
+        
+        for epoch in tqdm(range(self.num_epochs), desc="Processing", total=self.num_epochs, unit="Epochs"):
             
             current_optimizer.zero_grad()
-
             self.epoch_loss = 0
         
-            for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]), 
-                                                               desc="Processing", total=len(self.images), unit="images")):
-                
+            for i, (image, kx_iter, ky_iter) in enumerate(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1])):
                 self._update_spectrum(image, kx_iter, ky_iter)
                 
             # Backpropagation
             self.epoch_loss.backward()
             clip_grad_norm_(self.model.parameters(), max_norm = 100, norm_type=2)
             current_optimizer.step()
+            
             # update switch counter
             epochs_since_switch += 1
-            
-            if epochs_since_switch >= flag:
+            if epochs_since_switch >= optim_flag:
                 if current_optimizer == self.spectrum_optimiser:
                     current_optimizer = self.pupil_optimiser
                 else:
                     current_optimizer = self.spectrum_optimiser
                 
                 epochs_since_switch = 0  # Reset the counter
-            
-            # Logging
-            if epoch % flag == 0:
-                print(f"Epoch [{epoch}/{self.num_epochs}], Loss: {self.epoch_loss.item():.6f}")
-            
+
+            # Update alpha value
+            self.update_alpha(epoch)
+                
+            # Update loss list
             self.losses.append(self.epoch_loss.detach().numpy())
-            
+
+            self.epochs_passed +=1
+            # Updating live plot
+            if live_flag is not None:
+                if epoch % live_flag == 0:
+                    self._update_live_loss(fig,ax,line,epoch)
+
+            # Logging
+            if epoch % optim_flag == 0:
+                print(f"Epoch [{epoch}/{self.num_epochs}], Loss: {self.epoch_loss.item():.6f} , Alpha: {self.alpha} ")
+                
         self.post_process()
+        
+    def _update_live_loss(self, fig, ax, line, epoch):
+
+        line.set_xdata(range(self.epochs_passed))
+        line.set_ydata(self.losses)
+        ax.relim()
+        ax.autoscale_view()
+
+        clear_output(wait=True)
+        display(fig)
+    
+        # Refresh the plot
+        
+        #fig.canvas.draw()
+        fig.canvas.flush_events()
+        
         
     def _update_spectrum(self, image, kx_iter, ky_iter):
         
@@ -265,12 +374,14 @@ class FINN:
         
         #image = torch.sqrt(image)
         #image *= (1/torch.sum(torch.abs(image)))
+
+        tv_reg = self.tv_regularization(reconstructed_image)
         
         loss = self.loss_fn(torch.abs(reconstructed_image), torch.sqrt(torch.abs(image)))
         if torch.isnan(loss):
             raise ValueError("There is a Nan value, check the configurations ")
             
-        self.epoch_loss += loss  # Accumulate loss
+        self.epoch_loss += loss  + self.alpha * tv_reg # Accumulate loss
 
     def post_process(self):
         
@@ -345,6 +456,87 @@ class FINN:
         plt.ylabel("Loss")
         plt.title("Loss Metric per Epoch")
         plt.show()
+    
+    def save_reconsturction(self, file_path):
+
+        # Prepare metadata
+        metadata = {
+            
+        "Num_epochs": self.num_epochs,
+        "upsample_factor": self.band_multiplier,
+        "pupil_dims" : self.pupil_dims,
+        "coherent_image_dims": self.image_dims,
+        }
+        optimiser_spectrum = {**self.spectrum_optimiser.param_groups[0]}
+        optimiser_pupil = {**self.pupil_optimiser.param_groups[0]}
+
+        kbounds = {
+        "bounds_kx": str(self.bounds_x),
+        "bouns_ky": str(self.bounds_y),
+        "dks": str(self.dks),
+        "obj_bandwidth_x": str(self.omega_obj_x),
+        "obj_bandwidth_y": str(self.omega_obj_y)
+        }
+
+        alpha_meta = {
+        "alpha_begin" : self.alpha,
+        "alpha_init": self.alpha_init,
+        "alpha_flag":self.alpha_flag,
+        "alpha_steps": self.alpha_steps ,
+        "gamma": self.gamma,
+        }
+        
+
+        with h5py.File(file_path, "w") as h5f:
+            # Save metadata as attributes in the root group
+            recon_params = h5f.create_group("Recon Params")
+            optimser1_params= h5f.create_group("Spectrum Optimiser Data")
+            optimser2_params= h5f.create_group("Pupil Optimiser Data")
+
+            kdata = h5f.create_group("K-space Params")
+            tv_params = h5f.create_group("TV update")
+            
+            for key, value in metadata.items():
+                recon_params.attrs[key] = value  # Store each parameter as an attribute
+            
+            for key, value in optimiser_spectrum.items():
+                if key == 'params':
+                    continue
+                optimser1_params.attrs[key] = str(value)
+                
+            for key, value in optimiser_pupil.items():
+                if key == 'params':
+                    continue
+                optimser2_params.attrs[key] = str(value)
+                
+            for key, value in kbounds.items():
+                kdata.attrs[key] = value
+            for key, value in alpha_meta.items():
+                tv_params.attrs[key] = value
+                        
+            # Save reconstructed images 
+            amp = np.abs(self.recon_obj)
+            pha = np.angle(self.recon_obj)
+            h5f.create_dataset("object_amplitude", data=amp, compression="gzip")
+            h5f.create_dataset("object_phase", data=pha, compression="gzip")
+            
+            # Save spectrum 
+            amp = np.abs(self.recon_spectrum)
+            pha = np.angle(self.recon_spectrum)
+            h5f.create_dataset("Fourier_amplitude", data=amp, compression="gzip")
+            h5f.create_dataset("Fourier_phase", data=pha, compression="gzip")
+            
+            # Save reconstructed pupil function
+            amp = np.abs(self.pupil_func)
+            pha = np.angle(self.pupil_func)
+            h5f.create_dataset("Pupil_amplitude", data=amp, compression="gzip")
+            h5f.create_dataset("Pupil_phase", data=pha, compression="gzip")
+    
+            # Save loss values
+            h5f.create_dataset("loss_values", data=np.array(self.losses), compression="gzip")
+
+        
+        
 
 def train_fourier_ptychography(model, target_images, num_epochs=500, lr=0.01):
     """
