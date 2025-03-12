@@ -12,7 +12,7 @@ from torch.autograd import Variable
 from IPython.display import display, clear_output
 
 from ..utils_pr import *
-from ..plotting_fs import plot_images_side_by_side, update_live_plot, initialize_live_plot
+from ..plotting_fs import plot_images_side_by_side, update_live_plot, initialize_live_plot, plot_roi_from_numpy
 from ..data_fs import * #downsample_array, upsample_images, pad_to_double
 
 class ForwardModel(nn.Module):
@@ -445,7 +445,7 @@ class FINN:
                         vmin1= None, vmax1=None, 
                         title1 = "CTF", cmap1 = "viridis"):
     
-        plot_roi_from_numpy(self.ctf, name=title, vmin1=vmin1, vmax1=vmax1)
+        plot_roi_from_numpy(self.ctf, name=title1, vmin1=vmin1, vmax1=vmax1)
 
 
     def plot_loss(self):
