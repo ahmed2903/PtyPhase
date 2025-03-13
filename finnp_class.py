@@ -35,12 +35,6 @@ class ForwardModel(nn.Module):
         
         self.ctf = mask_torch_ctf(pupil_size, device = device) 
         
-        #torch.ones(pupil_size[0]//2, pupil_size[1]//2, dtype=torch.float32)
-        
-        # Pad the CTF with zeros to match size of pupil
-        # pad = (pupil_size[1]//4, pupil_size[1]//4, pupil_size[0]//4, pupil_size[0]//4)
-        # self.ctf = F.pad(self.ctf, pad, "constant", 0)
-        
         self.max_pool = nn.AvgPool2d(kernel_size=self.band_multiplier) #, divisor_override=1)
         
 
@@ -278,6 +272,7 @@ class FINN:
     def iterate(self, epochs, optim_flag = 5, live_flag = None, n_jobs = -1):
             
         self.num_epochs = epochs
+        self.optim_flag = optim_flag
         self.last_alpha_update = self.num_epochs
 
         # Create separate optimizers for spectrum and pupil
@@ -469,6 +464,7 @@ class FINN:
         metadata = {
             
         "Num_epochs": self.num_epochs,
+        "Optim_flag": self.optim_flag,
         "upsample_factor": self.band_multiplier,
         "pupil_dims" : self.pupil_dims,
         "coherent_image_dims": self.image_dims,
