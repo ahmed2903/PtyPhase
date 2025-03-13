@@ -10,13 +10,15 @@ from torch.nn.utils import clip_grad_norm_
 import inspect
 from torch.autograd import Variable
 from IPython.display import display, clear_output
+import multiprocessing as mp
+from functools import partial
 
 from ..utils_pr import *
 from ..plotting_fs import plot_images_side_by_side, update_live_plot, initialize_live_plot
 from ..data_fs import * #downsample_array, upsample_images, pad_to_double
 
 class ForwardModel(nn.Module):
-    def __init__(self, spectrum_size, pupil_size, band_multiplier):
+    def __init__(self, spectrum_size, pupil_size, band_multiplier, device):
         super(ForwardModel, self).__init__()
         
         self.spectrum_size = spectrum_size
@@ -31,7 +33,7 @@ class ForwardModel(nn.Module):
         self.pupil_amp = nn.Parameter(torch.ones(pupil_size[0], pupil_size[1], dtype=torch.float32))
         self.pupil_pha = nn.Parameter(torch.zeros(pupil_size[0], pupil_size[1], dtype=torch.float32))
         
-        self.ctf = mask_torch_ctf(pupil_size) 
+        self.ctf = mask_torch_ctf(pupil_size, device = device) 
         
         #torch.ones(pupil_size[0]//2, pupil_size[1]//2, dtype=torch.float32)
         
@@ -89,7 +91,7 @@ class FINN:
     def prepare(self, model,  double_pupil = False, device = "cpu"):
 
         
-        
+        self.set_device(device=device)
         self._prep_images()
         self.kout_vec = np.array(self.kout_vec)
         self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.kout_vec, lr_psize = self.lr_psize, extend_to_double = double_pupil)
@@ -101,8 +103,8 @@ class FINN:
         self.pupil_dims = make_dims_even(self.pupil_dims)
         self.omega_obj_x, self.omega_obj_y  = calc_obj_freq_bandwidth(self.lr_psize)
         
-        self.set_device(device=device)
-        self.model = model(spectrum_size = self.image_dims, pupil_size = self.pupil_dims, band_multiplier = self.band_multiplier).to(self.device)
+        
+        self.model = model(spectrum_size = self.image_dims, pupil_size = self.pupil_dims, band_multiplier = self.band_multiplier, device = self.device).to(self.device)
         
         if self.device.type == "cuda":
             cuda_device_count = torch.cuda.device_count()
@@ -130,7 +132,7 @@ class FINN:
         
         # Ensure target_image is a tensor and has the same size as reconstructed_image
         if not isinstance(self.images, torch.Tensor):
-            self.images = torch.tensor(self.images, dtype=torch.float32)
+            self.images = torch.tensor(self.images, dtype=torch.float32, device = self.device)
         
         # # If target_image is not complex, convert it to complex
         # if not self.images.is_complex():
@@ -273,7 +275,7 @@ class FINN:
             self.last_alpha_update = epoch
     
         
-    def iterate(self, epochs, optim_flag = 5, live_flag = None):
+    def iterate(self, epochs, optim_flag = 5, live_flag = None, n_jobs = -1):
             
         self.num_epochs = epochs
         self.last_alpha_update = self.num_epochs
@@ -299,7 +301,11 @@ class FINN:
             
             current_optimizer.zero_grad()
             self.epoch_loss = 0
-        
+
+            #data = zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1])
+            #losses = Parallel(n_jobs=n_jobs)(delayed(self._update_spectrum)(image, kx, ky) for image, kx, ky in data)
+            #self.epoch_loss += sum(losses)
+            
             for i, (image, kx_iter, ky_iter) in enumerate(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1])):
                 self._update_spectrum(image, kx_iter, ky_iter)
                 
@@ -322,7 +328,7 @@ class FINN:
             self.update_alpha(epoch)
                 
             # Update loss list
-            self.losses.append(self.epoch_loss.detach().numpy())
+            self.losses.append(self.epoch_loss.detach().cpu().numpy())
 
             self.epochs_passed +=1
             # Updating live plot
@@ -332,7 +338,7 @@ class FINN:
 
             # Logging
             if epoch % optim_flag == 0:
-                print(f"Epoch [{epoch}/{self.num_epochs}], Loss: {self.epoch_loss.item():.6f} , Alpha: {self.alpha} ")
+                print(f"Epoch [{epoch}/{self.num_epochs}], Loss: {self.epoch_loss.item():.6f} , Alpha: {self.alpha:.6f} ")
                 
         self.post_process()
         
@@ -382,7 +388,7 @@ class FINN:
             raise ValueError("There is a Nan value, check the configurations ")
             
         self.epoch_loss += loss  + self.alpha * tv_reg # Accumulate loss
-
+    
     def post_process(self):
         
         spectrum_amp = self.model.spectrum_amp.detach()  # Detach from computation graph
