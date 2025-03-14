@@ -26,16 +26,23 @@ class ForwardModel(nn.Module):
         self.band_multiplier = band_multiplier
 
         # Initial guess: upsampled low-resolution image spectrum
-        self.spectrum_amp = nn.Parameter(torch.normal(1,1,(spectrum_size[0]*self.band_multiplier, spectrum_size[1]*self.band_multiplier), dtype=torch.float32))
-        self.spectrum_pha = nn.Parameter(torch.zeros(spectrum_size[0]*self.band_multiplier, spectrum_size[1]*self.band_multiplier, dtype=torch.float32))
+        self.spectrum_amp = nn.Parameter(torch.normal(1,1,(spectrum_size[0]*self.band_multiplier, spectrum_size[1]*self.band_multiplier), dtype=torch.float64))
+        self.spectrum_pha = nn.Parameter(torch.zeros(spectrum_size[0]*self.band_multiplier, spectrum_size[1]*self.band_multiplier, dtype=torch.float64))
         
 
-        self.pupil_amp = nn.Parameter(torch.ones(pupil_size[0], pupil_size[1], dtype=torch.float32))
-        self.pupil_pha = nn.Parameter(torch.zeros(pupil_size[0], pupil_size[1], dtype=torch.float32))
+        self.pupil_amp = nn.Parameter(torch.ones(pupil_size[0], pupil_size[1], dtype=torch.float64))
+        self.pupil_pha = nn.Parameter(torch.zeros(pupil_size[0], pupil_size[1], dtype=torch.float64))
         
         self.ctf = mask_torch_ctf(pupil_size, device = device) 
         
-        self.max_pool = nn.AvgPool2d(kernel_size=self.band_multiplier) #, divisor_override=1)
+        self.down_sample = nn.AvgPool2d(kernel_size=self.band_multiplier) #, divisor_override=1)
+
+        # Learnable convolutional layer (replacing AvgPool2d)
+        #self.down_sample = nn.Conv2d(1, 1, kernel_size=self.band_multiplier, stride=self.band_multiplier, padding=0, bias=False)
+        
+        # Initialize conv weights similar to average pooling (for stability)
+        #nn.init.constant_(self.down_sample.weight, 1.0 / (self.band_multiplier ** 2))
+        #nn.init.constant_(self.down_sample.bias, 0.0)
         
 
     def forward(self, bounds):
@@ -59,9 +66,9 @@ class ForwardModel(nn.Module):
         low_res_amp = torch.abs(low_res_image)
         low_res_pha = torch.angle(low_res_image)
 
-        low_res_amp = self.max_pool(low_res_amp.unsqueeze(0)).squeeze(0)
-        low_res_pha = self.max_pool(low_res_pha.unsqueeze(0)).squeeze(0)
-
+        low_res_amp = self.down_sample(low_res_amp.unsqueeze(0)).squeeze(0)
+        low_res_pha = self.down_sample(low_res_pha.unsqueeze(0)).squeeze(0)
+        
         low_res_image = low_res_amp * torch.exp(1j*low_res_pha)
         
         return low_res_image
@@ -103,14 +110,15 @@ class FINN:
         if self.device.type == "cuda":
             cuda_device_count = torch.cuda.device_count()
             if cuda_device_count > 1:
+                print(f"Available cuda devices: {cuda_device_count}")
                 self.cuda_device_count = cuda_device_count
-                self.model = nn.DataParallel(self.model)
+                #self.model = nn.DataParallel(self.model)
                 self.model.to(self.device)
             print('Using %s'%torch.cuda.get_device_name(0))
         else:
             print('Using %s'%self.device.type)
 
-        self.model = self.model.float()
+        self.model = self.model.double()
 
 
         #self.set_model(model, spectrum_size = self.image_dims, pupil_size = self.pupil_dims)
@@ -126,7 +134,7 @@ class FINN:
         
         # Ensure target_image is a tensor and has the same size as reconstructed_image
         if not isinstance(self.images, torch.Tensor):
-            self.images = torch.tensor(self.images, dtype=torch.float32, device = self.device)
+            self.images = torch.tensor(self.images, dtype=torch.float64, device = self.device)
         
         # # If target_image is not complex, convert it to complex
         # if not self.images.is_complex():
