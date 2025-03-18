@@ -38,11 +38,11 @@ class ForwardModel(nn.Module):
         self.down_sample = nn.AvgPool2d(kernel_size=self.band_multiplier) #, divisor_override=1)
 
         # Learnable convolutional layer (replacing AvgPool2d)
-        #self.down_sample = nn.Conv2d(1, 1, kernel_size=self.band_multiplier, stride=self.band_multiplier, padding=0, bias=False)
+        # self.down_sample = nn.Conv2d(1, 1, kernel_size=self.band_multiplier, stride=self.band_multiplier, padding=0, bias=False)
         
         # Initialize conv weights similar to average pooling (for stability)
-        #nn.init.constant_(self.down_sample.weight, 1.0 / (self.band_multiplier ** 2))
-        #nn.init.constant_(self.down_sample.bias, 0.0)
+        # nn.init.constant_(self.down_sample.weight, 1.0 / (self.band_multiplier ** 2))
+        # nn.init.constant_(self.down_sample.bias, 0.0)
         
 
     def forward(self, bounds):
@@ -86,8 +86,8 @@ class FINN:
         self.lr_psize = lr_psize
         self.band_multiplier = band_multiplier
         self.losses = []
+        
         self.epochs_passed = 0
-
 
     def prepare(self, model,  double_pupil = False, device = "cpu"):
 
@@ -377,9 +377,7 @@ class FINN:
         bounds = [[kx_lidx, kx_hidx], [ky_lidx, ky_hidx]]
         reconstructed_image = self.model(bounds)
 
-        #tmp = reconstructed_image.detach().clone()
-        #scale = (torch.sum(torch.sqrt(torch.abs(image)))/ torch.sum(torch.abs(reconstructed_image) ))
-        #tmp *= scale
+        #scale = 1 #(torch.sum(torch.sqrt(torch.abs(image)))/ torch.sum(torch.abs(reconstructed_image) ))
         
         #image = torch.sqrt(image)
         #image *= (1/torch.sum(torch.abs(image)))
