@@ -47,7 +47,7 @@ class ForwardModel(nn.Module):
 
     def forward(self, bounds):
         """ Forward propagation: reconstruct low-resolution complex field """
-        # Create complex spectrum and pupil from real and imaginary parts
+        # Create complex spectrum and pupil
         spectrum = self.spectrum_amp * torch.exp(1j * self.spectrum_pha)
         
         pupil = (self.pupil_amp * self.ctf) * torch.exp(1j * self.pupil_pha * self.ctf)       
@@ -57,10 +57,10 @@ class ForwardModel(nn.Module):
         pupil_patch = pupil.index_select(0, torch.arange(sx, ex, device=pupil.device))
         pupil_patch = pupil_patch.index_select(1, torch.arange(sy, ey, device=pupil.device))
 
-        # Apply pupil function (acting as a low-pass filter)
+        # Apply pupil function 
         forward_spectrum = spectrum * pupil_patch
 
-        # Inverse Fourier Transform to reconstruct low-resolution image
+        # Inverse Fourier Transform to simulate low-resolution image
         low_res_image = fft.fftshift(fft.ifft2(fft.ifftshift(forward_spectrum)))
 
         low_res_amp = torch.abs(low_res_image)
@@ -86,7 +86,7 @@ class FINN:
         self.lr_psize = lr_psize
         self.band_multiplier = band_multiplier
         self.losses = []
-        
+        self.sec_loss_fn = None
         self.epochs_passed = 0
 
     def prepare(self, model,  double_pupil = False, device = "cpu"):
@@ -205,10 +205,18 @@ class FINN:
         else:
             self.pupil_optimiser = optimiser([self.model.pupil_amp, self.model.pupil_pha], **optimiser_args)
          
-    def set_loss_func(self, loss_func, **kwargs):
+    def set_loss_func(self, loss_func, beta= 1, **kwargs):
         
         func_args = self.GetKwArgs(loss_func, kwargs)
         self.loss_fn = loss_func(**func_args)
+        self.beta = beta
+
+    def set_secondary_loss_func(self, loss_func, gamma, **kwargs):
+
+        func_args = self.GetKwArgs(loss_func, kwargs)
+        self.sec_loss_fn = loss_func(**func_args)
+        self.gamma = gamma
+        self.beta = 1.0-gamma
 
     def tv_regularization(self, image):
         """
@@ -377,7 +385,8 @@ class FINN:
         bounds = [[kx_lidx, kx_hidx], [ky_lidx, ky_hidx]]
         reconstructed_image = self.model(bounds)
 
-        #scale = 1 #(torch.sum(torch.sqrt(torch.abs(image)))/ torch.sum(torch.abs(reconstructed_image) ))
+        #scale = (torch.sum(torch.sqrt(torch.abs(image)))/ torch.sum(torch.abs(reconstructed_image) ))
+        #scaled_image = reconstructed_image* scale
         
         #image = torch.sqrt(image)
         #image *= (1/torch.sum(torch.abs(image)))
@@ -385,11 +394,16 @@ class FINN:
         tv_reg = self.tv_regularization(reconstructed_image)
         
         loss = self.loss_fn(torch.abs(reconstructed_image), torch.sqrt(torch.abs(image)))
+        
         if torch.isnan(loss):
             raise ValueError("There is a Nan value, check the configurations ")
             
-        self.epoch_loss += loss  + self.alpha * tv_reg # Accumulate loss
+        self.epoch_loss += self.beta * loss  + self.alpha * tv_reg # Accumulate loss
     
+        if self.sec_loss_fn is not None:
+            loss2 = self.sec_loss_fn(torch.abs(reconstructed_image), torch.sqrt(torch.abs(image)))
+            self.epoch_loss += self.gamma * loss2
+            
     def post_process(self):
         
         spectrum_amp = self.model.spectrum_amp.detach()  # Detach from computation graph
