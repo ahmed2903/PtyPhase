@@ -13,9 +13,10 @@ from IPython.display import display, clear_output
 import multiprocessing as mp
 from functools import partial
 
-from ..utils_pr import *
-from ..plotting_fs import plot_images_side_by_side, update_live_plot, initialize_live_plot, plot_roi_from_numpy
-from ..data_fs import * #downsample_array, upsample_images, pad_to_double
+from utils_pr import *
+from plotting import plot_images_side_by_side, plot_roi_from_numpy
+from tqdm.notebook import tqdm, trange
+from scipy.ndimage import zoom 
 
 class ForwardModel(nn.Module):
     """
