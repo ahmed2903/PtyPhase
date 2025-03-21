@@ -14,7 +14,7 @@ import multiprocessing as mp
 from functools import partial
 
 from ..utils_pr import *
-from ..plotting_fs import plot_images_side_by_side, update_live_plot, initialize_live_plot
+from ..plotting_fs import plot_images_side_by_side, update_live_plot, initialize_live_plot, plot_roi_from_numpy
 from ..data_fs import * #downsample_array, upsample_images, pad_to_double
 
 class ForwardModel(nn.Module):
@@ -98,7 +98,7 @@ class ForwardModel(nn.Module):
     
     
 class FINN:
-     """
+    """
     A neural network-based framework for image reconstruction using Fourier-based methods.
 
     This class handles loading images, preparing dimensions, performing reconstruction using 
@@ -109,7 +109,7 @@ class FINN:
                  kout_vec, 
                  lr_psize, 
                  band_multiplier=1):
-         """
+        """
         Initializes the FINN reconstruction framework.
 
         Args:
@@ -522,7 +522,7 @@ class FINN:
         self.post_process()
         
     def _update_live_loss(self, fig, ax, line, epoch):
-         """
+        """
         Update the live loss plot during training.
 
         This method updates the live loss plot by setting the x and y data for the line plot, 
@@ -553,7 +553,7 @@ class FINN:
         
         #image = Variable(image).to(self.device)
         
-         """
+        """
         Performs a Fourier domain update on the spectrum using the given image and 
         the current kx, ky values.
 
@@ -699,7 +699,7 @@ class FINN:
             title1 (str): Title for the CTF plot.
             cmap1 (str): Colormap for the CTF plot.
         """
-        plot_roi_from_numpy(self.ctf, name=title, vmin1=vmin1, vmax1=vmax1)
+        plot_roi_from_numpy(self.ctf, name=title1, vmin1=vmin1, vmax1=vmax1)
 
 
     def plot_loss(self):
