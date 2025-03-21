@@ -18,7 +18,29 @@ from ..plotting_fs import plot_images_side_by_side, update_live_plot, initialize
 from ..data_fs import * #downsample_array, upsample_images, pad_to_double
 
 class ForwardModel(nn.Module):
+    """
+    A neural network-based forward model for simulating the low-resolution images 
+    from a high-resolution spectrum using a pupil function. The object spectrum and 
+    the pupil function are treated as layers with learnable parameters.
+
+    Attributes:
+        spectrum_amp (torch.nn.Parameter): Amplitude of the high-resolution spectrum.
+        spectrum_pha (torch.nn.Parameter): Phase of the high-resolution spectrum.
+        pupil_amp (torch.nn.Parameter): Amplitude of the pupil function.
+        pupil_pha (torch.nn.Parameter): Phase of the pupil function.
+        ctf (torch.Tensor): Contrast transfer function (CTF) mask.
+        down_sample (torch.nn.AvgPool2d): Downsampling operation for generating low-resolution images.
+    """
     def __init__(self, spectrum_size, pupil_size, band_multiplier, device):
+        """
+        Initializes the ForwardModel with given parameters.
+
+        Args:
+            spectrum_size (tuple): The size of the high-resolution spectrum (height, width).
+            pupil_size (tuple): The size of the pupil function (height, width).
+            band_multiplier (int): The factor by which the spectrum is upsampled.
+            device (torch.device): The computing device (CPU or GPU).
+        """
         super(ForwardModel, self).__init__()
         
         self.spectrum_size = spectrum_size
@@ -35,18 +57,19 @@ class ForwardModel(nn.Module):
         
         self.ctf = mask_torch_ctf(pupil_size, device = device) 
         
-        self.down_sample = nn.AvgPool2d(kernel_size=self.band_multiplier) #, divisor_override=1)
-
-        # Learnable convolutional layer (replacing AvgPool2d)
-        # self.down_sample = nn.Conv2d(1, 1, kernel_size=self.band_multiplier, stride=self.band_multiplier, padding=0, bias=False)
-        
-        # Initialize conv weights similar to average pooling (for stability)
-        # nn.init.constant_(self.down_sample.weight, 1.0 / (self.band_multiplier ** 2))
-        # nn.init.constant_(self.down_sample.bias, 0.0)
+        self.down_sample = nn.AvgPool2d(kernel_size=self.band_multiplier) 
         
 
     def forward(self, bounds):
-        """ Forward propagation: reconstruct low-resolution complex field """
+        """
+        Simulates the forward propagation to generate a low-resolution image.
+
+        Args:
+            bounds (list of tuples): The spatial region (sx, ex, sy, ey) for extracting a pupil function patch.
+
+        Returns:
+            torch.Tensor: The simulated low-resolution image as a complex tensor.
+        """
         # Create complex spectrum and pupil
         spectrum = self.spectrum_amp * torch.exp(1j * self.spectrum_pha)
         
@@ -75,12 +98,26 @@ class ForwardModel(nn.Module):
     
     
 class FINN:
-    
+     """
+    A neural network-based framework for image reconstruction using Fourier-based methods.
+
+    This class handles loading images, preparing dimensions, performing reconstruction using 
+    a neural network, visualizing images and loss functions, setting loss functions, optimizers, 
+    and all related components for the reconstruction process.
+    """
     def __init__(self, images, 
                  kout_vec, 
                  lr_psize, 
                  band_multiplier=1):
-        
+         """
+        Initializes the FINN reconstruction framework.
+
+        Args:
+            images (numpy.ndarray or torch.Tensor): The input images for reconstruction.
+            kout_vec (numpy.ndarray or torch.Tensor): The k-space output vectors.
+            lr_psize (float): The pixel size of the low-resolution images.
+            band_multiplier (int, optional): Factor for upsampling the spectrum. Default is 1.
+        """
         self.images = images
         self.kout_vec = kout_vec
         self.lr_psize = lr_psize
@@ -91,7 +128,23 @@ class FINN:
 
     def prepare(self, model,  double_pupil = False, device = "cpu"):
 
-        
+        """
+        Prepares the reconstruction pipeline by setting the device, processing image dimensions, 
+        and initializing the neural network model.
+
+        This method:
+        - Sets the computation device (CPU or GPU).
+        - Prepares images and converts kout vectors to NumPy arrays.
+        - Computes spatial frequency bounds and step sizes.
+        - Determines the pupil dimensions, ensuring they are even.
+        - Calculates the object frequency bandwidth.
+        - Initializes the neural network model with the computed dimensions.
+
+        Args:
+            model (torch.nn.Module): The neural network model for reconstruction.
+            double_pupil (bool, optional): If True, extends the dimensions to double size. Default is False.
+            device (str, optional): The computation device ('cpu' or 'cuda'). Default is 'cpu'.
+        """
         self.set_device(device=device)
         self._prep_images()
         self.kout_vec = np.array(self.kout_vec)
@@ -121,13 +174,17 @@ class FINN:
         self.model = self.model.double()
 
 
-        #self.set_model(model, spectrum_size = self.image_dims, pupil_size = self.pupil_dims)
-        
-        #self._load_pupil()
-
 
     def _prep_images(self):
+        """
+        Converts the input images to a NumPy array and ensures they are stored as a PyTorch tensor.
 
+        This method:
+        - Converts `self.images` into a NumPy array if it is not already one.
+        - Extracts image dimensions and assigns them to `self.image_dims`.
+        - Ensures `self.images` is a PyTorch tensor of type float64 and moves it to the specified device.
+
+        """
         self.images = np.array(self.images)
         self.image_dims = self.images[0].shape
         self.nx_lr, self.ny_lr = self.image_dims
@@ -136,30 +193,61 @@ class FINN:
         if not isinstance(self.images, torch.Tensor):
             self.images = torch.tensor(self.images, dtype=torch.float64, device = self.device)
         
-        # # If target_image is not complex, convert it to complex
-        # if not self.images.is_complex():
-        #     self.images = self.images.to(dtype=torch.complex64)
-            
-            
-        
-    def _load_pupil(self):
-        pass
-        # self.pupil_dims = round((self.kx_max_n - self.kx_min_n)/self.dkx), round((self.ky_max_n - self.ky_min_n)/self.dky)
+    def save_model(self, file_path):
+        """
+        Save the model's state to a file.
+    
+        Args:
+            file_path (str): The path where the model's state will be saved.
 
-        # if isinstance(self.pupil_func, str):
-        #     phase = np.load(self.pupil_func)
-        # elif isinstance(self.pupil_func, np.ndarray):
-        #     phase = self.pupil_func
-        # else:
-        #     phase = np.zeros(self.pupil_dims)
+        """
+        # Save the model's state_dict (parameters)
+        torch.save(self.model.state_dict(), file_path)
+        print(f"Model saved to {file_path}")
 
-        # phase = downsample_array(phase, self.pupil_dims)
-        # self.pupil_func = np.exp(1j*phase)
+    def load_model(self, file_path):
+        """
+        Load the model's state from a file.
+    
+        Args:
+            file_path (str): The path from which the model's state will be loaded.
+        """
+        # Load the model's state_dict (parameters)
+        self.model.load_state_dict(torch.load(file_path))
+        self.model.eval()  # Set model to evaluation mode (if needed)
+        print(f"Model loaded from {file_path}")
         
+    def load_pupil(self, pupil_phase_array):
+        """
+        Load and scale the initial pupil phase guess to fit within self.pupil_dims, 
+        while ensuring that it can be updated with gradients during optimization.
+    
+        Args:
+            pupil_phase_array (numpy.ndarray): The initial pupil phase guess.
+
+        """
+        # Get the scaling factors for each dimension
+        scale_x = self.pupil_dims[0] / pupil_phase_array.shape[0]
+        scale_y = self.pupil_dims[1] / pupil_phase_array.shape[1]
+        
+        # Scale the pupil phase array to match the required pupil dimensions
+        scaled_pupil_phase = zoom(pupil_phase_array, (scale_x, scale_y))
+        
+        # Convert the scaled pupil phase to a tensor that requires gradients
+        self.model.pupil_pha = torch.tensor(scaled_pupil_phase, dtype=torch.float32, device=self.device, requires_grad=True)
+    
 
     def set_device(self, device='cpu'):
         """
-        Sets the device to either CPU ('cpu') or GPU ('cuda'), if available.
+        Configures the computation device for the model.
+
+        This method:
+        - Checks if a GPU is available when 'cuda' is specified.
+        - Clears CUDA memory cache if switching to GPU.
+        - Sets `self.device` to either CPU or GPU accordingly.
+
+        Args:
+            device (str): The desired computation device ('cpu' or 'cuda').
         """
         if torch.cuda.is_available() and device == 'cuda':
             torch.cuda.empty_cache()
@@ -168,6 +256,21 @@ class FINN:
             self.device = torch.device("cpu")
             
     def GetKwArgs(self, obj, kwargs):
+        """
+        Extracts valid keyword arguments for a given object's function signature.
+
+        This method:
+        - Retrieves the parameter names of `obj` that have default values.
+        - Filters `kwargs` to retain only those keys that match these parameters.
+        - Returns a dictionary containing only valid keyword arguments.
+
+        Args:
+            obj (callable): The function or method whose signature is analyzed.
+            kwargs (dict): The dictionary of keyword arguments to filter.
+
+        Returns:
+            dict: A dictionary containing valid keyword arguments for `obj`.
+        """
         obj_sigs = []
         obj_args = {}
         for arg in inspect.signature(obj).parameters.values():
@@ -180,9 +283,19 @@ class FINN:
 
     def set_spectrum_optimiser(self, optimiser, **kwargs):
         """
-        Add an optimiser. Must occur before 
-        corresponding AddScheduler. 
-        Specify key words for optimiser.
+        Sets the optimizer for the spectrum parameters.
+
+        This method:
+        - Filters valid keyword arguments for the optimizer using `GetKwArgs`.
+        - Ensures that a learning rate ("lr") is provided.
+        - Initializes the optimizer with the model's spectrum amplitude and phase parameters.
+
+        Args:
+            optimiser (torch.optim.Optimizer): The optimizer class to be used.
+            **kwargs: Additional keyword arguments for the optimizer.
+
+        Raises:
+            ValueError: If the learning rate ("lr") is not provided in `kwargs`.
         """
         optimiser_args = self.GetKwArgs(optimiser, kwargs)
         if not "lr" in optimiser_args:
@@ -192,9 +305,19 @@ class FINN:
 
     def set_pupil_optimiser(self, optimiser, freeze_pupil_amp = False, **kwargs):
         """
-        Add an optimiser. Must occur before 
-        corresponding AddScheduler. 
-        Specify key words for optimiser.
+        Sets the optimizer for the pupil parameters.
+
+        This method:
+        - Filters valid keyword arguments for the optimizer using `GetKwArgs`.
+        - Ensures that a learning rate ("lr") is provided.
+        - Initializes the optimizer with the model's spectrum amplitude and phase parameters.
+
+        Args:
+            optimiser (torch.optim.Optimizer): The optimizer class to be used.
+            **kwargs: Additional keyword arguments for the optimizer.
+
+        Raises:
+            ValueError: If the learning rate ("lr") is not provided in `kwargs`.
         """
         optimiser_args = self.GetKwArgs(optimiser, kwargs)
         if not "lr" in optimiser_args:
@@ -206,13 +329,37 @@ class FINN:
             self.pupil_optimiser = optimiser([self.model.pupil_amp, self.model.pupil_pha], **optimiser_args)
          
     def set_loss_func(self, loss_func, beta= 1, **kwargs):
-        
+        """
+        Sets the primary loss function for the reconstruction process.
+
+        This method:
+        - Extracts valid keyword arguments for the loss function using `GetKwArgs`.
+        - Initializes the loss function with the provided parameters.
+        - Sets a weighting factor `beta` for potential loss scaling.
+
+        Args:
+            loss_func (callable): The loss function to be used.
+            beta (float, optional): A scaling factor for the loss function. Default is 1.
+            **kwargs: Additional keyword arguments for the loss function.
+        """
         func_args = self.GetKwArgs(loss_func, kwargs)
         self.loss_fn = loss_func(**func_args)
         self.beta = beta
 
     def set_secondary_loss_func(self, loss_func, gamma, **kwargs):
+        """
+        Sets the secondary loss function and adjusts the weighting factors.
 
+        This method:
+        - Extracts valid keyword arguments for the loss function using `GetKwArgs`.
+        - Initializes the secondary loss function with the provided parameters.
+        - Sets the weighting factors `gamma` for the secondary loss and updates `beta` accordingly.
+
+        Args:
+            loss_func (callable): The secondary loss function to be used.
+            gamma (float): Weighting factor for the secondary loss function.
+            **kwargs: Additional keyword arguments for the loss function.
+        """
         func_args = self.GetKwArgs(loss_func, kwargs)
         self.sec_loss_fn = loss_func(**func_args)
         self.gamma = gamma
@@ -220,13 +367,17 @@ class FINN:
 
     def tv_regularization(self, image):
         """
-        Compute the Total Variation (TV) regularization term
-    
+        Compute the Total Variation (TV) regularization term.
+
+        This method computes the Total Variation regularization for a given image. The TV regularization term 
+        encourages smoothness by penalizing large gradients between adjacent pixels. It is often used in image 
+        reconstruction to avoid overfitting and promote image smoothness.
+
         Args:
-        images (torch.Tensor): A 4D tensor of shape (batch_size, channels, height, width).
-    
+            image (torch.Tensor): A tensor representing the image or batch of images, with shape (batch_size, channels, height, width).
+
         Returns:
-        torch.Tensor: The TV regularization term for each image in the batch (shape: (batch_size,)).
+            torch.Tensor: The TV regularization term for each image in the batch (shape: (batch_size,)).
         """
         # Compute gradients in x and y directions
         gradient_x = torch.abs(torch.roll(image, shifts=-1, dims=1) - image)
@@ -243,15 +394,16 @@ class FINN:
     def set_alpha_scheduler(self, alpha_flag, alpha_init, alpha_steps, gamma):
         """
         Initialize the alpha scheduler.
-    
+
+        This method sets up the alpha scheduler, which controls the alpha parameter during training. The 
+        alpha parameter can evolve based on the specified frequency and the multiplicative factor gamma.
+
         Args:
-            n_epochs (int): Number of epochs to keep alpha = 0.
-            alpha_init (float): Initial value of alpha after n_epochs.
-            m_epochs (int): Frequency of updating alpha (every m epochs).
-            gamma (float): Multiplicative factor for alpha.
-    
-        Returns:
-            dict: A dictionary containing the scheduler parameters and state.
+            alpha_flag (bool): Flag indicating whether to enable alpha scheduling.
+            alpha_init (float): Initial value of alpha after the specified number of epochs.
+            alpha_steps (int): Number of epochs after which alpha is updated.
+            gamma (float): Multiplicative factor for updating alpha.
+
         """
         self.alpha = 0.0
         self.alpha_init = alpha_init
@@ -263,10 +415,13 @@ class FINN:
         """
         Update alpha based on the current epoch.
     
+        This method updates the alpha parameter based on the current epoch. Initially, alpha is set to zero 
+        for the first n epochs. After that, it is set to the initial value (`alpha_init`), and every `alpha_steps` 
+        epochs, alpha is multiplied by a factor (`gamma`).
+
         Args:
-            scheduler (dict): The scheduler dictionary returned by `set_alpha_scheduler`.
             epoch (int): Current epoch number.
-    
+
         Returns:
             float: Updated value of alpha.
         """
@@ -286,7 +441,20 @@ class FINN:
     
         
     def iterate(self, epochs, optim_flag = 5, live_flag = None, n_jobs = -1):
-            
+        """
+        Iterate through the optimization process for a specified number of epochs.
+
+        This method runs the training loop, optimizing the spectrum and pupil with alternating optimizers, 
+        and performing backpropagation to minimize the loss. If the `live_flag` is specified, it updates the 
+        loss plot in real-time.
+
+        Args:
+            epochs (int): The number of epochs for training.
+            optim_flag (int, optional): The frequency of switching between optimizers. Default is 5.
+            live_flag (int, optional): The frequency of updating the live loss plot. If None, the plot is not updated. Default is None.
+            n_jobs (int, optional): The number of parallel jobs for processing. Default is -1 (all available cores).
+
+        """
         self.num_epochs = epochs
         self.optim_flag = optim_flag
         self.last_alpha_update = self.num_epochs
@@ -354,7 +522,19 @@ class FINN:
         self.post_process()
         
     def _update_live_loss(self, fig, ax, line, epoch):
+         """
+        Update the live loss plot during training.
 
+        This method updates the live loss plot by setting the x and y data for the line plot, 
+        and then refreshing the plot to reflect the new loss values.
+
+        Args:
+            fig (matplotlib.figure.Figure): The figure object for the live plot.
+            ax (matplotlib.axes.Axes): The axes object for the plot.
+            line (matplotlib.lines.Line2D): The line object representing the loss curve.
+            epoch (int): The current epoch number (used to update the plot).
+
+        """
         line.set_xdata(range(self.epochs_passed))
         line.set_ydata(self.losses)
         ax.relim()
@@ -373,7 +553,20 @@ class FINN:
         
         #image = Variable(image).to(self.device)
         
-        """Handles the Fourier domain update."""
+         """
+        Performs a Fourier domain update on the spectrum using the given image and 
+        the current kx, ky values.
+
+        This method calculates the Fourier domain bounds for the given image, 
+        performs the reconstruction using the model, computes the loss, and applies 
+        regularization to the reconstruction.
+
+        Args:
+            image (torch.Tensor): The input image to be used for updating the spectrum.
+            kx_iter (float): The kx value used for determining the bounds in the Fourier domain.
+            ky_iter (float): The ky value used for determining the bounds in the Fourier domain.
+
+        """
         kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
         kx_lidx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx) * self.band_multiplier, 0))
         kx_hidx = round(kx_cidx + self.omega_obj_x / (2 * self.dkx) *self.band_multiplier) + (1 if self.nx_lr % 2 != 0 else 0)
@@ -405,7 +598,14 @@ class FINN:
             self.epoch_loss += self.gamma * loss2
             
     def post_process(self):
-        
+        """
+        Performs post-processing to extract and compute the final results after training.
+
+        This method detaches the computed spectra and pupil functions from the computation graph, 
+        reconstructs the spectrum, object, and pupil functions, and calculates the corresponding 
+        contrast transfer function (CTF).
+
+        """
         spectrum_amp = self.model.spectrum_amp.detach()  # Detach from computation graph
         spectrum_pha = self.model.spectrum_pha.detach()
         
@@ -426,7 +626,15 @@ class FINN:
                      vmin1= None, vmax1=None, 
                      vmin2= -np.pi, vmax2=np.pi, 
                      title1 = "Object Amplitude", title2 = "Object Phase", cmap1 = "viridis", cmap2 = "viridis"):
-        
+        """
+        Plots the reconstructed object amplitude and phase side by side.
+    
+        Args:
+            vmin1, vmax1 (float): Minimum and maximum values for the object amplitude plot.
+            vmin2, vmax2 (float): Minimum and maximum values for the object phase plot.
+            title1, title2 (str): Titles for the object amplitude and phase plots.
+            cmap1, cmap2 (str): Colormap for the object amplitude and phase plots.
+        """
         image1 = np.abs(self.recon_obj)
         image2 = np.angle(self.recon_obj)
     
@@ -439,7 +647,16 @@ class FINN:
                          vmin1= None, vmax1=None, 
                      vmin2= -np.pi, vmax2=np.pi, 
                          title1 = "Fourier Amplitude", title2 = "Fourier Phase", cmap1 = "viridis", cmap2 = "viridis"):
-        
+        """
+        Plots the reconstructed Fourier amplitude and phase side by side.
+    
+        Args:
+            vmin1, vmax1 (float): Minimum and maximum values for the Fourier amplitude plot.
+            vmin2, vmax2 (float): Minimum and maximum values for the Fourier phase plot.
+            title1, title2 (str): Titles for the Fourier amplitude and phase plots.
+            cmap1, cmap2 (str): Colormap for the Fourier amplitude and phase plots.
+
+        """
         image1 = np.abs(self.recon_spectrum)
         image2 = np.angle(self.recon_spectrum)
 
@@ -453,7 +670,16 @@ class FINN:
                         vmin1= None, vmax1=None, 
                         vmin2= -np.pi, vmax2=np.pi, 
                         title1 = "Pupil Amplitude", title2 = "Pupil Phase", cmap1 = "viridis", cmap2 = "viridis"):
-        
+        """
+        Plots the pupil function amplitude and phase side by side.
+    
+        Args:
+            vmin1, vmax1 (float): Minimum and maximum values for the pupil amplitude plot.
+            vmin2, vmax2 (float): Minimum and maximum values for the pupil phase plot.
+            title1, title2 (str): Titles for the pupil amplitude and phase plots.
+            cmap1, cmap2 (str): Colormap for the pupil amplitude and phase plots.
+
+        """
         image1 = np.abs(self.pupil_func)
         image2 = np.angle(self.pupil_func)
     
@@ -465,12 +691,21 @@ class FINN:
     def plot_ctf(self, 
                         vmin1= None, vmax1=None, 
                         title1 = "CTF", cmap1 = "viridis"):
+        """
+        Plots the contrast transfer function (CTF).
     
+        Args:
+            vmin1, vmax1 (float): Minimum and maximum values for the CTF plot.
+            title1 (str): Title for the CTF plot.
+            cmap1 (str): Colormap for the CTF plot.
+        """
         plot_roi_from_numpy(self.ctf, name=title, vmin1=vmin1, vmax1=vmax1)
 
 
     def plot_loss(self):
-
+        """
+        Plots the loss over epochs.
+        """
         plt.figure()
         plt.plot(self.losses)
         plt.xlabel("Epochs")
@@ -479,7 +714,12 @@ class FINN:
         plt.show()
     
     def save_reconsturction(self, file_path):
-
+        """
+        Save the reconstruction data and metadata to an HDF5 file.
+    
+        Args:
+            file_path (str): The path where the HDF5 file will be saved.
+        """
         # Prepare metadata
         metadata = {
             
@@ -494,7 +734,7 @@ class FINN:
 
         kbounds = {
         "bounds_kx": str(self.bounds_x),
-        "bouns_ky": str(self.bounds_y),
+        "bounds_ky": str(self.bounds_y),
         "dks": str(self.dks),
         "obj_bandwidth_x": str(self.omega_obj_x),
         "obj_bandwidth_y": str(self.omega_obj_y)
@@ -535,24 +775,26 @@ class FINN:
                 kdata.attrs[key] = value
             for key, value in alpha_meta.items():
                 tv_params.attrs[key] = value
-                        
+
+            recon_group = h5f.create_group("Reconstructed Data")
             # Save reconstructed images 
             amp = np.abs(self.recon_obj)
             pha = np.angle(self.recon_obj)
-            h5f.create_dataset("object_amplitude", data=amp, compression="gzip")
-            h5f.create_dataset("object_phase", data=pha, compression="gzip")
+            recon_group = h5f.create_group("Reconstructed Data")
+            recon_group.create_dataset("object_amplitude", data=amp, compression="gzip")
+            recon_group.create_dataset("object_phase", data=pha, compression="gzip")
             
             # Save spectrum 
             amp = np.abs(self.recon_spectrum)
             pha = np.angle(self.recon_spectrum)
-            h5f.create_dataset("Fourier_amplitude", data=amp, compression="gzip")
-            h5f.create_dataset("Fourier_phase", data=pha, compression="gzip")
+            recon_group.create_dataset("Fourier_amplitude", data=amp, compression="gzip")
+            recon_group.create_dataset("Fourier_phase", data=pha, compression="gzip")
             
             # Save reconstructed pupil function
             amp = np.abs(self.pupil_func)
             pha = np.angle(self.pupil_func)
-            h5f.create_dataset("Pupil_amplitude", data=amp, compression="gzip")
-            h5f.create_dataset("Pupil_phase", data=pha, compression="gzip")
+            recon_group.create_dataset("Pupil_amplitude", data=amp, compression="gzip")
+            recon_group.create_dataset("Pupil_phase", data=pha, compression="gzip")
     
             # Save loss values
             h5f.create_dataset("loss_values", data=np.array(self.losses), compression="gzip")
@@ -564,7 +806,7 @@ def train_fourier_ptychography(model, target_images, num_epochs=500, lr=0.01):
     """
     Train the Fourier Ptychography network over multiple measurements.
     
-    Parameters:
+    Args:
     - model: Instance of FourierPtychographyNet
     - target_images: List of measured low-resolution images
     - pupil_amps: List of corresponding pupil function amplitudes
