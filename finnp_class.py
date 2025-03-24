@@ -13,8 +13,8 @@ from IPython.display import display, clear_output
 import multiprocessing as mp
 from functools import partial
 
-from utils_pr import *
-from plotting import plot_images_side_by_side, plot_roi_from_numpy
+from .utils_pr import *
+from .plotting import plot_images_side_by_side, plot_roi_from_numpy
 from tqdm.notebook import tqdm, trange
 from scipy.ndimage import zoom 
 
@@ -781,7 +781,6 @@ class FINN:
             # Save reconstructed images 
             amp = np.abs(self.recon_obj)
             pha = np.angle(self.recon_obj)
-            recon_group = h5f.create_group("Reconstructed Data")
             recon_group.create_dataset("object_amplitude", data=amp, compression="gzip")
             recon_group.create_dataset("object_phase", data=pha, compression="gzip")
             

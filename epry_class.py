@@ -7,8 +7,8 @@ from IPython.display import display, clear_output
 from tqdm.notebook import tqdm
 
 
-from utils_pr import *
-from plotting import plot_images_side_by_side, update_live_plot, initialize_live_plot
+from .utils_pr import *
+from .plotting import plot_images_side_by_side, update_live_plot, initialize_live_plot
 
 #from ..data_fs import * #downsample_array, upsample_images, pad_to_double
 
