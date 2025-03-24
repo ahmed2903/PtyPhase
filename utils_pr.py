@@ -26,7 +26,7 @@ def calc_obj_freq_bandwidth(lr_psize):
 
     return omega_obj_x, omega_obj_y
 
-def prepare_dims(images, kout_vec, lr_psize, extend_to_double):
+def prepare_dims(images, pupil_kins, lr_psize, extend_to_double):
     """
     Prepare the dimensions of the high resolution fourier space image. 
 
@@ -35,11 +35,8 @@ def prepare_dims(images, kout_vec, lr_psize, extend_to_double):
     """
     
     # Convert inputs to numpy arrays
-    kout_vec = np.array(kout_vec)
+    pupil_kins = np.array(pupil_kins)
 
-    # Number of coherent images
-    n_imgs = images.shape[0]
-    
     # Low-resolution image shape
     coh_img_dim = images[0].shape
     nx_lr, ny_lr = coh_img_dim
@@ -53,7 +50,7 @@ def prepare_dims(images, kout_vec, lr_psize, extend_to_double):
     dkx, dky = 2 * np.pi / Lx, 2 * np.pi / Ly
 
     # Define the extents of the wave vectors
-    kx, ky = kout_vec[:, 0], kout_vec[:, 1]
+    kx, ky = pupil_kins[:, 0], pupil_kins[:, 1]
     kx_min, kx_max = np.min(kx), np.max(kx)
     ky_min, ky_max = np.min(ky), np.max(ky)
 

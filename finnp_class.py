@@ -107,7 +107,8 @@ class FINN:
     and all related components for the reconstruction process.
     """
     def __init__(self, images, 
-                 kout_vec, 
+                 kin_vec, 
+                 pupil_kins, 
                  lr_psize, 
                  band_multiplier=1):
         """
@@ -115,12 +116,13 @@ class FINN:
 
         Args:
             images (numpy.ndarray or torch.Tensor): The input images for reconstruction.
-            kout_vec (numpy.ndarray or torch.Tensor): The k-space output vectors.
+            kin_vec (numpy.ndarray or torch.Tensor): The k-space output vectors.
             lr_psize (float): The pixel size of the low-resolution images.
             band_multiplier (int, optional): Factor for upsampling the spectrum. Default is 1.
         """
         self.images = images
-        self.kout_vec = kout_vec
+        self.kin_vec = kin_vec
+        self.pupil_kins = pupil_kins
         self.lr_psize = lr_psize
         self.band_multiplier = band_multiplier
         self.losses = []
@@ -148,8 +150,8 @@ class FINN:
         """
         self.set_device(device=device)
         self._prep_images()
-        self.kout_vec = np.array(self.kout_vec)
-        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.kout_vec, lr_psize = self.lr_psize, extend_to_double = double_pupil)
+        self.kin_vec = np.array(self.kin_vec)
+        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.pupil_kins, lr_psize = self.lr_psize, extend_to_double = double_pupil)
         self.kx_min_n, self.kx_max_n = self.bounds_x
         self.ky_min_n, self.ky_max_n = self.bounds_y
         self.dkx, self.dky = self.dks
@@ -236,7 +238,8 @@ class FINN:
         
         # Convert the scaled pupil phase to a tensor that requires gradients
         self.model.pupil_pha = torch.tensor(scaled_pupil_phase, dtype=torch.float32, device=self.device, requires_grad=True)
-    
+
+        
 
     def set_device(self, device='cpu'):
         """
@@ -482,11 +485,11 @@ class FINN:
             current_optimizer.zero_grad()
             self.epoch_loss = 0
 
-            #data = zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1])
+            #data = zip(self.images, self.kin_vec[:, 0], self.kin_vec[:, 1])
             #losses = Parallel(n_jobs=n_jobs)(delayed(self._update_spectrum)(image, kx, ky) for image, kx, ky in data)
             #self.epoch_loss += sum(losses)
             
-            for i, (image, kx_iter, ky_iter) in enumerate(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1])):
+            for i, (image, kx_iter, ky_iter) in enumerate(zip(self.images, self.kin_vec[:, 0], self.kin_vec[:, 1])):
                 self._update_spectrum(image, kx_iter, ky_iter)
                 
             # Backpropagation
