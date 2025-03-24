@@ -26,7 +26,7 @@ def calc_obj_freq_bandwidth(lr_psize):
 
     return omega_obj_x, omega_obj_y
 
-def prepare_dims(images, kout_vec, lr_psize, extend_to_double):
+def prepare_dims(images, pupil_kins, lr_psize, extend = None, band_multiplier = 1):
     """
     Prepare the dimensions of the high resolution fourier space image. 
 
@@ -35,11 +35,8 @@ def prepare_dims(images, kout_vec, lr_psize, extend_to_double):
     """
     
     # Convert inputs to numpy arrays
-    kout_vec = np.array(kout_vec)
+    pupil_kins = np.array(pupil_kins)
 
-    # Number of coherent images
-    n_imgs = images.shape[0]
-    
     # Low-resolution image shape
     coh_img_dim = images[0].shape
     nx_lr, ny_lr = coh_img_dim
@@ -53,13 +50,13 @@ def prepare_dims(images, kout_vec, lr_psize, extend_to_double):
     dkx, dky = 2 * np.pi / Lx, 2 * np.pi / Ly
 
     # Define the extents of the wave vectors
-    kx, ky = kout_vec[:, 0], kout_vec[:, 1]
+    kx, ky = pupil_kins[:, 0], pupil_kins[:, 1]
     kx_min, kx_max = np.min(kx), np.max(kx)
     ky_min, ky_max = np.min(ky), np.max(ky)
 
     
     
-    if extend_to_double:
+    if extend == 'double' :
         range_x = kx_max - kx_min
         range_y = ky_max - ky_min
         
@@ -68,18 +65,18 @@ def prepare_dims(images, kout_vec, lr_psize, extend_to_double):
         
         ky_min = ky_min - range_y/2
         ky_max = ky_max + range_y/2
+
         
-    else:
+    elif extend == 'by_bandwidth':
         # Object bandwidth 
         omega_obj_x, omega_obj_y = calc_obj_freq_bandwidth(lr_psize)
         # Extend the range of kx and ky to fit boundary values
-        kx_min = kx_min - omega_obj_x
-        kx_max = kx_max + omega_obj_x
+        kx_min = kx_min - omega_obj_x * band_multiplier
+        kx_max = kx_max + omega_obj_x * band_multiplier
         
-        ky_min = ky_min - omega_obj_y
-        ky_max = ky_max + omega_obj_y
+        ky_min = ky_min - omega_obj_y * band_multiplier
+        ky_max = ky_max + omega_obj_y * band_multiplier
 
-    
     return (kx_min,kx_max), (ky_min,ky_max), (dkx,dky)
 
 def init_hr_image(bounds_x, bounds_y, dks):
@@ -116,8 +113,9 @@ def mask_torch_ctf(outer_size, device=torch.device('cpu')):
     Returns:
         mask: (2N, 2M) torch.Tensor
     """
+    print(f"The ctf outer size is: {outer_size}")
     mask = torch.zeros(outer_size, dtype=torch.float64, device=device)
-
+    
     # Calculate center indices
     N, M = outer_size[0]//2, outer_size[1]//2
     
