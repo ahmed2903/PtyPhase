@@ -113,7 +113,6 @@ def mask_torch_ctf(outer_size, device=torch.device('cpu')):
     Returns:
         mask: (2N, 2M) torch.Tensor
     """
-    print(f"The ctf outer size is: {outer_size}")
     mask = torch.zeros(outer_size, dtype=torch.float64, device=device)
     
     # Calculate center indices

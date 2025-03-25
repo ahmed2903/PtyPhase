@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from IPython.display import display, clear_output
 
 
-def plot_roi_from_numpy(array, roi=None, name=None, vmin=None, vmax=None, save = False, **kwargs):
+def plot_roi_from_numpy(array, roi=None, title='Plot', vmin=None, vmax=None, save = False, cmap='viridis'):
 
     """
     Plots a region of interest from a 2D numpy array
@@ -20,8 +20,6 @@ def plot_roi_from_numpy(array, roi=None, name=None, vmin=None, vmax=None, save =
     if roi is None:
         roi = [0,-1,0,-1]
 
-    if name is None:
-        name = "Plot"
 
     # Plot the pupil
     if len(array.shape) == 3 and 'frame' in kwargs:
@@ -40,8 +38,8 @@ def plot_roi_from_numpy(array, roi=None, name=None, vmin=None, vmax=None, save =
         vmax = me + 0.5 *me
         
     plt.figure()
-    plt.imshow(data_roi, vmin = vmin, vmax = vmax,cmap='viridis')
-    plt.title(name)
+    plt.imshow(data_roi, vmin = vmin, vmax = vmax,cmap=cmap)
+    plt.title(title)
     plt.colorbar()
     plt.show()
     
