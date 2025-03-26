@@ -475,7 +475,7 @@ class FINN:
             self.last_alpha_update = epoch
             
     ################################## Support Penalty ##################################
-    def support_penalty(self, image):
+    def support_penalty_amp_only(self, image):
         """Computes a penalty term based on the support constraint.
 
         This method penalizes intensity outside the defined support region by calculating 
@@ -495,7 +495,38 @@ class FINN:
         
         return amp_penalty 
         
-    def set_sw_support(self, flag, steps, sigma, threshold):
+    def support_penalty(self, image):
+        """
+        Computes a penalty term for amplitude and phase outside the support constraint.
+    
+        Args:
+            image (torch.Tensor): The input image (complex-valued tensor).
+        
+        Returns:
+            torch.Tensor: A scalar penalty value.
+        """
+        # Extract amplitude and phase
+        amplitude = torch.abs(image)
+        phase = torch.angle(image)
+    
+        # Compute amplitude penalty (outside support)
+        unmasked_amp = torch.ones_like(amplitude)
+        unmasked_amp[self.support > 0.5] = 0  # Mask the support region
+        unmasked_amp *= amplitude
+        amp_penalty = torch.sum(torch.abs(unmasked_amp)) / (torch.sum(torch.abs(amplitude)) + 1e-6)
+    
+        # Compute phase penalty (outside support)
+        unmasked_phase = torch.ones_like(phase)
+        unmasked_phase[self.support > 0.5] = 0  # Mask the support region
+        unmasked_phase *= phase
+        phase_penalty = torch.sum(torch.abs(unmasked_phase)) / (torch.sum(torch.abs(phase)) + 1e-6)
+    
+        # Total penalty
+        total_penalty = amp_penalty + 0.2 * phase_penalty  # Adjust phase weight
+    
+        return total_penalty
+    
+    def set_sw_support(self, flag, steps, sigma, threshold, zeta = 1):
         
         shp = self.image_dims[0]*self.band_multiplier,self.image_dims[1]*self.band_multiplier 
         self.support = torch.ones(shp, requires_grad=False, device = self.device)
@@ -504,7 +535,7 @@ class FINN:
         self.sw_steps = steps
         self.sw_sigma = sigma
         self.sw_threshold = threshold
-
+        self.zeta = zeta
         self.shrinkwrap = lambda data: ShrinkWrap( data=data,
                                                     sigma=sigma, 
                                                     threshold=threshold, 
@@ -601,7 +632,7 @@ class FINN:
             self.epoch_loss.backward()
             clip_grad_norm_(self.model.parameters(), max_norm = 100, norm_type=2)
             current_optimizer.step()
-            
+
             # update switch counter
             epochs_since_switch += 1
             if epochs_since_switch >= optim_flag:
@@ -611,7 +642,6 @@ class FINN:
                     current_optimizer = self.spectrum_optimiser
                 
                 epochs_since_switch = 0  # Reset the counter
-
             # Update alpha value
             self.update_alpha(self.epochs_passed)
 
@@ -620,7 +650,7 @@ class FINN:
             
             # Update loss list
             self.losses.append(self.epoch_loss.cpu().detach().numpy())
-            self.tv_losses.append(self.alpha*self.tv_loss.cpu().detach().numpy())
+            self.tv_losses.append(self.alpha_init*self.tv_loss.cpu().detach().numpy())
             self.supp_losses.append(self.supp_loss.cpu().detach().numpy())
             self.main_losses.append(self.mse_loss.cpu().detach().numpy())
             
@@ -697,7 +727,7 @@ class FINN:
         if torch.isnan(loss):
             raise ValueError("There is a Nan value, check the configurations ")
             
-        self.epoch_loss += self.beta * loss + self.alpha * tv_reg # + supp_loss # Accumulate loss
+        self.epoch_loss += self.beta * loss + self.alpha * tv_reg + self.zeta * supp_loss # Accumulate loss
         
         if self.sec_loss_fn is not None:
             loss2 = self.sec_loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
@@ -771,7 +801,7 @@ class FINN:
         """
         image1 = self.final_support
     
-        plot_roi_from_numpy(image1, title=title, cmap=cmap, figsize=(5, 5), show = True)
+        plot_roi_from_numpy(image1, title=title, cmap=cmap)
         
     def plot_rec_obj(self, 
                      vmin1= None, vmax1=None, 
@@ -885,7 +915,7 @@ class FINN:
         "coherent_image_dims": self.image_dims,
         }
         optimiser_spectrum = {**self.spectrum_optimiser.param_groups[0]}
-        optimiser_pupil = {**self.pupil_optimiser.param_groups[0]}
+        #optimiser_pupil = {**self.pupil_optimiser.param_groups[0]}
 
         kbounds = {
         "bounds_kx": str(self.bounds_x),
