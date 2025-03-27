@@ -130,10 +130,11 @@ class FINN:
         self.tv_losses = []
         self.supp_losses = []
         self.main_losses = []
-        
+        self.sec_losses = []
         self.sec_loss_fn = None
         self.epochs_passed = 0
         self.num_epochs = 0 
+        self.grad_norms = {}
         
     def prepare(self, model,  extend_pupil = None, device = "cpu"):
 
@@ -182,6 +183,8 @@ class FINN:
             print('Using %s'%self.device.type)
 
         self.model = self.model.double()
+
+        self.grad_norms = {name: [] for name, param in self.model.named_parameters()}  # Initialize empty lists
 
 
 
@@ -378,7 +381,7 @@ class FINN:
         self.loss_fn = loss_func(**func_args)
         self.beta = beta
 
-    def set_secondary_loss_func(self, loss_func, gamma, **kwargs):
+    def set_secondary_loss_func(self, loss_func, delta, **kwargs):
         """
         Sets the secondary loss function and adjusts the weighting factors.
 
@@ -389,13 +392,13 @@ class FINN:
 
         Args:
             loss_func (callable): The secondary loss function to be used.
-            gamma (float): Weighting factor for the secondary loss function.
+            delta (float): Weighting factor for the secondary loss function.
             **kwargs: Additional keyword arguments for the loss function.
         """
         func_args = self.GetKwArgs(loss_func, kwargs)
         self.sec_loss_fn = loss_func(**func_args)
-        self.gamma = gamma
-        self.beta = 1.0-gamma
+        self.delta = delta
+        self.beta = 1.0-delta
     ################################## TV Regularisaton ##################################
     def tv_regularization(self, image):
         """
@@ -441,7 +444,7 @@ class FINN:
         self.alpha_flag = alpha_flag
         self.alpha_steps = alpha_steps
         self.gamma = gamma
-    
+        
     def update_alpha(self, epoch):
         """
         Update alpha based on the current epoch.
@@ -475,7 +478,7 @@ class FINN:
             self.last_alpha_update = epoch
             
     ################################## Support Penalty ##################################
-    def support_penalty_amp_only(self, image):
+    def support_penalty(self, image):
         """Computes a penalty term based on the support constraint.
 
         This method penalizes intensity outside the defined support region by calculating 
@@ -488,54 +491,50 @@ class FINN:
             torch.Tensor: A scalar penalty value that quantifies how much of the image 
                           exists outside the support region.
         """
-        unmasked_amp = torch.ones_like(image)
+        amp = torch.abs(image)
+        unmasked_amp = torch.ones_like(amp)
         unmasked_amp[self.support > 0.5 ] = 0
-        unmasked_amp *= image
-        amp_penalty = torch.sum(torch.abs(unmasked_amp))/torch.sum(torch.abs(image)) + 1e-6
+        unmasked_amp *= amp
+        total_penalty = torch.abs(torch.sum(unmasked_amp)/torch.sum(amp)) + 1e-6
+
+        return total_penalty
         
-        return amp_penalty 
-        
-    def support_penalty(self, image):
-        """
-        Computes a penalty term for amplitude and phase outside the support constraint.
+    
+    def set_sw_support(self, flag, steps, sigma, threshold, phase_pen = 0, init_support = None, zeta = 1):
+        """Sets the support mask and parameters for the shrinkwrap algorithm.
+
+        This method initializes or updates the support mask used in the phase retrieval 
+        process. If `init_support` is provided, it is used as the initial support; 
+        otherwise, a default support mask of ones is created. It also configures the 
+        shrinkwrap parameters for adaptive support updates.
     
         Args:
-            image (torch.Tensor): The input image (complex-valued tensor).
-        
-        Returns:
-            torch.Tensor: A scalar penalty value.
+            flag (bool): Whether shrinkwrap is enabled (`True`) or disabled (`False`).
+            steps (int): Number of shrinkwrap update steps during the reconstruction.
+            sigma (float): Standard deviation for the Gaussian smoothing in shrinkwrap.
+            threshold (float): Threshold value for updating the support mask.
+            init_support (np.ndarray, torch.Tensor, or None, optional): 
+                The initial support mask. If `None`, a mask of ones is created. 
+                Defaults to `None`.
+            phase_pen (boolean, optional): Whether to penalise phases outside the support region. Default to 'False'
+            zeta (float, optional): A scaling factor for the support mask. Defaults to `1`.
         """
-        # Extract amplitude and phase
-        amplitude = torch.abs(image)
-        phase = torch.angle(image)
-    
-        # Compute amplitude penalty (outside support)
-        unmasked_amp = torch.ones_like(amplitude)
-        unmasked_amp[self.support > 0.5] = 0  # Mask the support region
-        unmasked_amp *= amplitude
-        amp_penalty = torch.sum(torch.abs(unmasked_amp)) / (torch.sum(torch.abs(amplitude)) + 1e-6)
-    
-        # Compute phase penalty (outside support)
-        unmasked_phase = torch.ones_like(phase)
-        unmasked_phase[self.support > 0.5] = 0  # Mask the support region
-        unmasked_phase *= phase
-        phase_penalty = torch.sum(torch.abs(unmasked_phase)) / (torch.sum(torch.abs(phase)) + 1e-6)
-    
-        # Total penalty
-        total_penalty = amp_penalty + 0.2 * phase_penalty  # Adjust phase weight
-    
-        return total_penalty
-    
-    def set_sw_support(self, flag, steps, sigma, threshold, zeta = 1):
-        
-        shp = self.image_dims[0]*self.band_multiplier,self.image_dims[1]*self.band_multiplier 
-        self.support = torch.ones(shp, requires_grad=False, device = self.device)
-        
+        self.phase_pen = phase_pen
+        if init_support == None:
+            shp = self.image_dims[0]*self.band_multiplier,self.image_dims[1]*self.band_multiplier 
+            self.support = torch.ones(shp, requires_grad=False, device = self.device)
+        elif isinstance(init_support, np.ndarray):
+            self.support = torch.tensor(init_support, dtype=torch.float64, device = self.device)
+        elif isinstance(init_support, torch.Tensor):
+            self.support = init_support
+        else:
+            raise ValueError("Passed in support must be a np.ndarray or torch.Tensor. Else None, and it will be initialised to array of ones.")
+            
         self.sw_flag = flag
         self.sw_steps = steps
         self.sw_sigma = sigma
         self.sw_threshold = threshold
-        self.zeta = zeta
+        self.zeta_init = zeta
         self.shrinkwrap = lambda data: ShrinkWrap( data=data,
                                                     sigma=sigma, 
                                                     threshold=threshold, 
@@ -549,7 +548,7 @@ class FINN:
         The support is then update using the ShrinkWrap class. 
         This method gets called in update_sw_support()
         """
-        support = self.shrinkwrap(torch.abs(self.recon_obj))
+        support = self.shrinkwrap(torch.abs(self.recon_obj_tensor))
         self.support = support.get()
         
         
@@ -563,8 +562,12 @@ class FINN:
         Args:
             epoch (int): Current epoch number.
         """            
+        if epoch < self.sw_flag:
+            self.zeta = 0
+            
         if epoch == self.sw_flag:
             self._update_support()
+            self.zeta = self.zeta_init
             self.last_sw_update = epoch
             
         elif (epoch > self.sw_flag) and (
@@ -606,7 +609,18 @@ class FINN:
             ax.set_xlabel("Epoch")
             ax.set_ylabel("Loss")
             ax.set_title("Live Loss Plot")
-            line, = ax.plot([],[])
+            
+            line_tot, = ax.plot([],[])
+            line_mse, = ax.plot([],[])
+            line_supp, = ax.plot([],[])
+            line_tv, = ax.plot([],[])
+            
+            line_tot.set_label('All Loss')
+            line_mse.set_label('MSE')
+            line_supp.set_label('Support')
+            line_tv.set_label('TV')
+            ax.legend()
+            
             plt.tight_layout()
             plt.ion()
             plt.show()
@@ -619,13 +633,20 @@ class FINN:
             self.mse_loss = 0
             self.tv_loss = 0
             self.supp_loss = 0
-             
+            self.sec_loss = 0
             
             #data = zip(self.images, self.kin_vec[:, 0], self.kin_vec[:, 1])
             #losses = Parallel(n_jobs=n_jobs)(delayed(self._process_image)(image, kx, ky) for image, kx, ky in data)
             #self.epoch_loss += sum(losses)
             
             for i, (image, kx_iter, ky_iter) in enumerate(zip(self.images, self.kin_vec[:, 0], self.kin_vec[:, 1])):
+                # Update alpha value
+                self.update_alpha(self.epochs_passed)
+    
+                # Update Support 
+                self.update_sw_support(self.epochs_passed)
+
+                
                 self._process_image(image, kx_iter, ky_iter)
                 
             # Backpropagation
@@ -633,6 +654,16 @@ class FINN:
             clip_grad_norm_(self.model.parameters(), max_norm = 100, norm_type=2)
             current_optimizer.step()
 
+            for name, param in self.model.named_parameters():
+                if not param.requires_grad:
+                    print(f"{name} is FROZEN (requires_grad=False)!")
+                if param.grad is None:
+                    self.grad_norms[name].append(param.grad.norm().item().cpu().detach().numpy())
+                    print(f"{name} has NO gradient!")
+                elif torch.all(param.grad == 0):
+                    print(f"{name} has ZERO gradient!")
+                
+                    
             # update switch counter
             epochs_since_switch += 1
             if epochs_since_switch >= optim_flag:
@@ -642,30 +673,25 @@ class FINN:
                     current_optimizer = self.spectrum_optimiser
                 
                 epochs_since_switch = 0  # Reset the counter
-            # Update alpha value
-            self.update_alpha(self.epochs_passed)
-
-            # Update Support 
-            self.update_sw_support(self.epochs_passed)
+            
             
             # Update loss list
             self.losses.append(self.epoch_loss.cpu().detach().numpy())
             self.tv_losses.append(self.alpha_init*self.tv_loss.cpu().detach().numpy())
             self.supp_losses.append(self.supp_loss.cpu().detach().numpy())
             self.main_losses.append(self.mse_loss.cpu().detach().numpy())
-            
+            if self.sec_loss_fn is not None:
+                self.sec_losses.append(self.sec_loss.cpu().detach().numpy())
             self.epochs_passed +=1
             
             # Updating live plot
             if live_flag is not None and epoch % live_flag == 0:
-                self._update_live_loss(fig,ax,line,epoch)
+                self._update_live_loss(fig,ax,line_tot,line_mse,line_supp,line_tv,epoch)
                     
             # Logging
             if epoch % optim_flag == 0:
                 print(f"Epoch [{self.epochs_passed-1}/{self.num_epochs}], Loss: {self.epoch_loss.item():.6f} , Alpha: {self.alpha:.6f} ")
             
-            
-        
         self.post_process()
         
     def _get_current_object_image(self):
@@ -676,8 +702,7 @@ class FINN:
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_spectrum = self.recon_spectrum
-        self.recon_obj = torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum)))
+        self.recon_obj_tensor = torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum)))
         
     def _process_image(self, image, kx_iter, ky_iter):
         
@@ -715,23 +740,24 @@ class FINN:
         #image = torch.sqrt(image)
         #image *= (1/torch.sum(torch.abs(image)))
         
-        tv_reg = self.tv_regularization(self.recon_obj)
-        supp_loss = self.support_penalty(self.recon_obj)
+        tv_reg = self.tv_regularization(self.recon_obj_tensor)
+        supp_loss = self.support_penalty(self.recon_obj_tensor)
         
         loss = self.loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
 
         self.mse_loss += loss
         self.tv_loss += tv_reg
-        self.supp_loss += supp_loss
+        self.supp_loss += supp_loss            
         
         if torch.isnan(loss):
             raise ValueError("There is a Nan value, check the configurations ")
             
-        self.epoch_loss += self.beta * loss + self.alpha * tv_reg + self.zeta * supp_loss # Accumulate loss
+        self.epoch_loss += (self.beta * loss + self.alpha * tv_reg + self.zeta * supp_loss) /(self.beta + self.alpha + self.zeta) # Accumulate loss
         
         if self.sec_loss_fn is not None:
             loss2 = self.sec_loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
-            self.epoch_loss += self.gamma * loss2
+            self.epoch_loss += self.delta * loss2
+            self.sec_loss += loss2
             
     def post_process(self):
         """
@@ -764,7 +790,7 @@ class FINN:
     ################################## Plotting and Saving ###############################################
     ######################################################################################################
     
-    def _update_live_loss(self, fig, ax, line, epoch):
+    def _update_live_loss(self, fig, ax, line_tot,line_mse,line_supp,line_tv, epoch):
         """
         Update the live loss plot during training.
 
@@ -778,16 +804,31 @@ class FINN:
             epoch (int): The current epoch number (used to update the plot).
 
         """
-        line.set_xdata(range(self.epochs_passed))
-        line.set_ydata(self.losses)
+        line_tot.set_xdata(range(self.epochs_passed))
+        line_tot.set_ydata(self.losses)
+        
+        
+        line_mse.set_xdata(range(self.epochs_passed))
+        line_mse.set_ydata(self.main_losses)
+        
+
+        line_supp.set_xdata(range(self.epochs_passed))
+        line_supp.set_ydata(self.supp_losses)
+        
+
+        line_tv.set_xdata(range(self.epochs_passed))
+        line_tv.set_ydata(self.tv_losses)
+        
+
+        
+        ax.set_title(f"Epoch = {self.epochs_passed-1}, Loss = {self.epoch_loss:.3f}")
+        ax.set_yscale('log')
         ax.relim()
         ax.autoscale_view()
-
+        
         clear_output(wait=True)
         display(fig)
-    
-        # Refresh the plot
-        
+            
         #fig.canvas.draw()
         fig.canvas.flush_events()
     
@@ -883,7 +924,7 @@ class FINN:
         plot_roi_from_numpy(self.ctf, name=title1, vmin1=vmin1, vmax1=vmax1)
 
 
-    def plot_loss(self):
+    def plot_loss(self, log_scale = True):
         """
         Plots the loss over epochs.
         """
@@ -892,10 +933,28 @@ class FINN:
         plt.plot(self.tv_losses, label = 'TV')
         plt.plot(self.main_losses, label = 'MSE')
         plt.plot(self.supp_losses, label = 'Support')
+        if self.sec_loss_fn is not None:
+            plt.plot(self.sec_losses, label = "Sec Loss")
         plt.xlabel("Epochs")
         plt.ylabel("Loss")
+        if log_scale:
+            plt.yscale("log")
         plt.legend()
         plt.title("Loss Metrics per Epoch")
+        plt.show()
+        
+    def plot_grad_norms(self):
+        """
+        Plots the grad norms over epochs.
+        """
+        plt.figure(figsize=(10, 6))
+        for name, norms in self.grad_norms.items():
+            plt.plot(norms, label=name)
+        plt.xlabel("Epoch")
+        plt.ylabel("Gradient Norm")
+        plt.title("Gradient Norms Over Training")
+        plt.legend()
+        plt.grid()
         plt.show()
     
     def save_reconsturction(self, file_path):
@@ -981,12 +1040,13 @@ class FINN:
             recon_group.create_dataset("Pupil_phase", data=pha, compression="gzip")
     
             # Save loss values
-            losses = h5f.create_group("Reconstructed Data")
+            losses = h5f.create_group("Losses")
             losses.create_dataset("all_loss_values", data=np.array(self.losses), compression="gzip")
             losses.create_dataset("support_loss_values", data=np.array(self.supp_losses), compression="gzip")
             losses.create_dataset("tv_reg_values", data=np.array(self.tv_losses), compression="gzip")
             losses.create_dataset("main_loss_values", data=np.array(self.main_losses), compression="gzip")
-
+            if self.sec_loss_fn is not None:
+                losses.create_dataset("second loss func", data=np.array(self.sec_losses), compression="gzip")
         
         
 
