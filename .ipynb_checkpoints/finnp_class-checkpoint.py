@@ -111,7 +111,9 @@ class FINN:
                  kin_vec, 
                  pupil_kins, 
                  lr_psize, 
-                 band_multiplier=1):
+                 band_multiplier=1,
+                 debug=False,
+                    verbose=True):
         """
         Initializes the FINN reconstruction framework.
 
@@ -126,15 +128,15 @@ class FINN:
         self.pupil_kins = pupil_kins
         self.lr_psize = lr_psize
         self.band_multiplier = band_multiplier
-        self.losses = []
         self.tv_losses = []
         self.supp_losses = []
         self.main_losses = []
-        self.sec_losses = []
         self.sec_loss_fn = None
         self.epochs_passed = 0
         self.num_epochs = 0 
         self.grad_norms = {}
+        self.debug = debug
+        self.verbose = verbose
         
     def prepare(self, model,  extend_pupil = None, device = "cpu"):
 
@@ -152,7 +154,7 @@ class FINN:
 
         Args:
             model (torch.nn.Module): The neural network model for reconstruction.
-            double_pupil (bool, optional): If True, extends the dimensions to double size. Default is False.
+            double_pupil (str, optional): Mode of pupil extension. "by_bandwidth", "double", None. Default is None
             device (str, optional): The computation device ('cpu' or 'cuda'). Default is 'cpu'.
         """
         self.set_device(device=device)
@@ -310,7 +312,30 @@ class FINN:
             if key in obj_sigs:
                 obj_args[key] = value
         return obj_args
+    ############################## Set Optimisers ##############################
+    def set_pupil_schedular(self, scheduler, **kwargs):
+        """
+        Add scheduler function to schedule LR update.
+        StepLR just multiplies LR by gamma by n epochs.
+        """
+        scheduler_args = self.GetKwArgs(scheduler, kwargs)
+        if scheduler is optim.lr_scheduler.StepLR and not "step_size" in scheduler_args:
+            scheduler_args['step_size'] = kwargs['step_size']
+        print(f"schedular argss: {scheduler_args}")
+        self.pupil_schedular = scheduler(self.pupil_optimiser, **scheduler_args)
 
+    def set_spectrum_schedular(self, scheduler, **kwargs):
+        """
+        Add scheduler function to schedule LR update.
+        StepLR just multiplies LR by gamma by n epochs.
+        """
+        scheduler_args = self.GetKwArgs(scheduler, kwargs)
+        
+        if scheduler is optim.lr_scheduler.StepLR and not "step_size" in scheduler_args:
+            scheduler_args['step_size'] = kwargs['step_size']
+        print(f"schedular argss: {scheduler_args}")
+        self.spectrum_schedular = scheduler(self.spectrum_optimiser, **scheduler_args)
+        
     def set_spectrum_optimiser(self, optimiser, **kwargs):
         """
         Sets the optimizer for the spectrum parameters.
@@ -331,8 +356,8 @@ class FINN:
         if not "lr" in optimiser_args:
             raise ValueError("Learning rate must be passed")
         
-        self.spectrum_optimiser = optimiser([self.model.spectrum_amp, self.model.spectrum_pha], **optimiser_args)
-
+        self.spectrum_optimiser = optimiser([self.model.spectrum_amp, self.model.spectrum_pha, self.model.pupil_amp, self.model.pupil_pha], **optimiser_args)
+        
     def set_pupil_optimiser(self, optimiser, freeze_pupil_amp = False, **kwargs):
         """
         Sets the optimizer for the pupil parameters.
@@ -358,6 +383,7 @@ class FINN:
         else:
             self.pupil_optimiser = optimiser([self.model.pupil_amp, self.model.pupil_pha], **optimiser_args)
 
+        self.spectrum_optimiser.param_groups[0]['params'] = [self.model.spectrum_amp, self.model.spectrum_pha]
     ######################################################################################################
     ################################## Losses and Regs ###################################################
     ######################################################################################################
@@ -378,7 +404,10 @@ class FINN:
             **kwargs: Additional keyword arguments for the loss function.
         """
         func_args = self.GetKwArgs(loss_func, kwargs)
-        self.loss_fn = loss_func(**func_args)
+        if isinstance(loss_func, type):  
+            self.loss_fn = loss_func(**func_args)  # Instantiating the loss function
+        else:
+            self.loss_fn = loss_func
         self.beta = beta
 
     def set_secondary_loss_func(self, loss_func, delta, **kwargs):
@@ -396,7 +425,10 @@ class FINN:
             **kwargs: Additional keyword arguments for the loss function.
         """
         func_args = self.GetKwArgs(loss_func, kwargs)
-        self.sec_loss_fn = loss_func(**func_args)
+        if isinstance(loss_func, type):  
+            self.loss_fn = loss_func(**func_args)  # Instantiating the loss function
+        else:
+            self.loss_fn = loss_func
         self.delta = delta
         self.beta = 1.0-delta
     ################################## TV Regularisaton ##################################
@@ -416,16 +448,16 @@ class FINN:
         """
         # Compute gradients in x and y directions
         gradient_x = torch.abs(torch.roll(image, shifts=-1, dims=1) - image)
-        #gradient_x = gradient_x[:, :-1]  # Remove the last column (invalid due to roll)
+        #gradient_x = gradient_x[:, :-1]  # Remove the last column 
         gradient_y = torch.abs(torch.roll(image, shifts=-1, dims=0) - image)
-        #gradient_y = gradient_y[:-1, :]  # Remove the last row (invalid due to roll)
+        #gradient_y = gradient_y[:-1, :]  # Remove the last row 
     
         # Compute the TV regularization term for each image
         tv = torch.sum(torch.sqrt(gradient_x**2 + gradient_y**2))
         
         return tv
 
-    def set_tv_scheduler(self, alpha_flag, alpha_init, alpha_steps=1, gamma=1):
+    def set_tv_param(self, alpha):
         """
         Initialize the alpha tv scheduler.
 
@@ -439,11 +471,7 @@ class FINN:
             gamma (float): Multiplicative factor for updating alpha. (Default = 1)
 
         """
-        self.alpha = 0.0
-        self.alpha_init = alpha_init
-        self.alpha_flag = alpha_flag
-        self.alpha_steps = alpha_steps
-        self.gamma = gamma
+        self.alpha = alpha
         
     def update_alpha(self, epoch):
         """
@@ -562,12 +590,11 @@ class FINN:
         Args:
             epoch (int): Current epoch number.
         """            
-        if epoch < self.sw_flag:
-            self.zeta = 0
+        if self.sw_steps is None:
+            return
             
         if epoch == self.sw_flag:
             self._update_support()
-            self.zeta = self.zeta_init
             self.last_sw_update = epoch
             
         elif (epoch > self.sw_flag) and (
@@ -579,7 +606,8 @@ class FINN:
     #########################################################################################
     ################################## Learning Parameters ##################################
     #########################################################################################
-        
+   
+    ################################# Main Loop #################################
     def iterate(self, epochs, optim_flag = 5, live_flag = None, n_jobs = -1):
         """
         Iterate through the optimization process for a specified number of epochs.
@@ -600,100 +628,120 @@ class FINN:
 
         # Create separate optimizers for spectrum and pupil
         current_optimizer = self.spectrum_optimiser
+        current_schedular = self.spectrum_schedular
+        
         epochs_since_switch = 0  # Counter to track epochs since last switch
 
         if live_flag is not None:
-            # plotting live loss
-            plt.ion()
-            fig, ax = plt.subplots()
-            ax.set_xlabel("Epoch")
-            ax.set_ylabel("Loss")
-            ax.set_title("Live Loss Plot")
+            #fig, ax, line_mse, line_tv, line_supp = self._init_live_plot()
+            fig, ax, line_mse, line_tv = self._init_live_plot()
+        if self.debug:
+            epochs = 2
             
-            line_tot, = ax.plot([],[])
-            line_mse, = ax.plot([],[])
-            line_supp, = ax.plot([],[])
-            line_tv, = ax.plot([],[])
-            
-            line_tot.set_label('All Loss')
-            line_mse.set_label('MSE')
-            line_supp.set_label('Support')
-            line_tv.set_label('TV')
-            ax.legend()
-            
-            plt.tight_layout()
-            plt.ion()
-            plt.show()
-        
-        
         for epoch in tqdm(range(epochs), desc="Processing", total=epochs, unit="Epochs"):
             
             current_optimizer.zero_grad()
-            self.epoch_loss = 0
+            #self.epoch_loss = 0
             self.mse_loss = 0
             self.tv_loss = 0
             self.supp_loss = 0
-            self.sec_loss = 0
-            
-            #data = zip(self.images, self.kin_vec[:, 0], self.kin_vec[:, 1])
-            #losses = Parallel(n_jobs=n_jobs)(delayed(self._process_image)(image, kx, ky) for image, kx, ky in data)
-            #self.epoch_loss += sum(losses)
-            
-            for i, (image, kx_iter, ky_iter) in enumerate(zip(self.images, self.kin_vec[:, 0], self.kin_vec[:, 1])):
-                # Update alpha value
-                self.update_alpha(self.epochs_passed)
-    
-                # Update Support 
-                self.update_sw_support(self.epochs_passed)
 
-                
+            # Update Support 
+            self.update_sw_support(self.epochs_passed)
+
+            for i, (image, kx_iter, ky_iter) in enumerate(zip(self.images, self.kin_vec[:, 0], self.kin_vec[:, 1])):    
+                # Forward Pass
                 self._process_image(image, kx_iter, ky_iter)
-                
-            # Backpropagation
-            self.epoch_loss.backward()
-            clip_grad_norm_(self.model.parameters(), max_norm = 100, norm_type=2)
-            current_optimizer.step()
 
-            for name, param in self.model.named_parameters():
-                if not param.requires_grad:
-                    print(f"{name} is FROZEN (requires_grad=False)!")
-                if param.grad is None:
-                    self.grad_norms[name].append(param.grad.norm().item().cpu().detach().numpy())
-                    print(f"{name} has NO gradient!")
-                elif torch.all(param.grad == 0):
-                    print(f"{name} has ZERO gradient!")
-                
-                    
+        
+            # Compute gradients
+            self._compute_gradients()
+            # Update Parameters
+            current_optimizer.step()    
+            current_schedular.step()
+            
+            if self.debug:
+                self._print_debugs()
+            if self.verbose:
+                self._print_verbose()
+            
             # update switch counter
-            epochs_since_switch += 1
-            if epochs_since_switch >= optim_flag:
-                if current_optimizer == self.spectrum_optimiser:
-                    current_optimizer = self.pupil_optimiser
-                else:
-                    current_optimizer = self.spectrum_optimiser
-                
-                epochs_since_switch = 0  # Reset the counter
+            if self.pupil_optimiser is not None:
+                epochs_since_switch += 1
+                if epochs_since_switch >= optim_flag:
+                    if current_optimizer == self.spectrum_optimiser:
+                        current_optimizer = self.pupil_optimiser
+                        current_schedular = self.pupil_schedular
+                    else:
+                        current_optimizer = self.spectrum_optimiser
+                        current_schedular = self.spectrum_schedular
+                    epochs_since_switch = 0  # Reset the counter
             
             
             # Update loss list
-            self.losses.append(self.epoch_loss.cpu().detach().numpy())
-            self.tv_losses.append(self.alpha_init*self.tv_loss.cpu().detach().numpy())
+            self.tv_losses.append(self.tv_loss.cpu().detach().numpy())
             self.supp_losses.append(self.supp_loss.cpu().detach().numpy())
             self.main_losses.append(self.mse_loss.cpu().detach().numpy())
-            if self.sec_loss_fn is not None:
-                self.sec_losses.append(self.sec_loss.cpu().detach().numpy())
+        
             self.epochs_passed +=1
             
             # Updating live plot
             if live_flag is not None and epoch % live_flag == 0:
-                self._update_live_loss(fig,ax,line_tot,line_mse,line_supp,line_tv,epoch)
+                #self._update_live_loss(fig,ax,line_mse,line_tv,line_supp,epoch)
+                self._update_live_loss(fig,ax,line_mse,line_tv,epoch)
                     
-            # Logging
-            if epoch % optim_flag == 0:
-                print(f"Epoch [{self.epochs_passed-1}/{self.num_epochs}], Loss: {self.epoch_loss.item():.6f} , Alpha: {self.alpha:.6f} ")
-            
         self.post_process()
+
+    ################################# Helper function #################################
+    def _compute_grad_norm(self,grad_list):
+        """Compute the total L2 norm of a list of gradients (ignoring None)."""
+        non_none_grads = [g for g in grad_list if g is not None]
+        if not non_none_grads:
+            return 0.0
+        return torch.norm(torch.stack([torch.norm(g) for g in non_none_grads]))
         
+    def _normalize_gradients(self,gradients):
+        """Normalize gradients to have unit L2 norm (to balance their contributions)."""
+        
+        non_none_grads = [g for g in gradients if g is not None]
+        if not non_none_grads:
+            return gradients
+
+        
+        # Compute the total norm of all gradients (treat as one vector)
+        #total_norm = torch.norm(torch.stack([torch.norm(g) for g in non_none_grads]))
+        total_norm = torch.sqrt(sum(torch.norm(g, p=2) ** 2 for g in non_none_grads))
+        
+        # Normalize each gradient (avoid division by zero)
+        eps = 1e-8
+        normalized_grads = [g / (total_norm + eps) if g is not None else None 
+                            for g in gradients]
+
+        if self.debug:
+            print(f"Gradient list length before norm: {len(gradients)}, after: {len(normalized_grads)}")
+            
+        return normalized_grads
+
+    def _compute_gradients(self):
+        # Compute independent gradients 
+        self.tv_grad = torch.autograd.grad(self.tv_loss, self.model.parameters(), retain_graph=True, allow_unused=True)
+        self.mse_grad = torch.autograd.grad(self.mse_loss, self.model.parameters(), retain_graph = True) 
+        self.supp_grad = torch.autograd.grad(self.supp_loss, self.model.parameters(), retain_graph = True, allow_unused=True) 
+        
+        self.tv_grad = self._normalize_gradients(self.tv_grad)
+        self.mse_grad = self._normalize_gradients(self.mse_grad)
+        self.supp_grad = self._normalize_gradients(self.supp_grad)
+          
+        # Compute the mean of gradients
+        """
+        self.combined_grads = [torch.mean(torch.stack([g1 if g1 is not None else g2, 
+                                                  g2 if g2 is not None else g1]), dim=0) 
+                                              for g1, g2 in zip(self.mse_grad, self.tv_grad)]
+        """
+        self.combined_grads = self.mse_grad
+        for param, grad in zip(self.model.parameters(), self.combined_grads):
+            param.grad = grad
+            
     def _get_current_object_image(self):
         """
         Private method for updating the reconstructed object. 
@@ -703,11 +751,8 @@ class FINN:
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
         self.recon_obj_tensor = torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum)))
-        
-    def _process_image(self, image, kx_iter, ky_iter):
-        
-        #image = Variable(image).to(self.device)
-        
+    
+    def _process_image(self, image, kx_iter, ky_iter):        
         """
         Performs a Fourier domain update on the spectrum using the given image and 
         the current kx, ky values.
@@ -734,30 +779,23 @@ class FINN:
         low_resolution_image = self.model(bounds)
         self._get_current_object_image()
         
-        #scale = (torch.sum(torch.sqrt(torch.abs(image)))/ torch.sum(torch.abs(reconstructed_image) ))
-        #scaled_image = reconstructed_image* scale
-        
-        #image = torch.sqrt(image)
-        #image *= (1/torch.sum(torch.abs(image)))
-        
         tv_reg = self.tv_regularization(self.recon_obj_tensor)
         supp_loss = self.support_penalty(self.recon_obj_tensor)
         
         loss = self.loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
-
-        self.mse_loss += loss
+        self.mse_loss += self.beta * loss
         self.tv_loss += tv_reg
         self.supp_loss += supp_loss            
-        
+
+        if self.sec_loss_fn is not None:
+            sec_loss = self.sec_loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
+            self.mse_loss += self.delta * sec_loss
+
         if torch.isnan(loss):
             raise ValueError("There is a Nan value, check the configurations ")
             
-        self.epoch_loss += (self.beta * loss + self.alpha * tv_reg + self.zeta * supp_loss) /(self.beta + self.alpha + self.zeta) # Accumulate loss
+        #self.epoch_loss += (self.beta * loss + self.alpha * tv_reg + self.zeta * supp_loss) /(self.beta + self.alpha + self.zeta) # Accumulate loss
         
-        if self.sec_loss_fn is not None:
-            loss2 = self.sec_loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
-            self.epoch_loss += self.delta * loss2
-            self.sec_loss += loss2
             
     def post_process(self):
         """
@@ -789,8 +827,73 @@ class FINN:
     ######################################################################################################
     ################################## Plotting and Saving ###############################################
     ######################################################################################################
+    def _print_debugs(self):
+        are_equal = all( torch.allclose(g1, g2, rtol=1e-5, atol=1e-8) 
+                        if (g1 is not None and g2 is not None) 
+                        else (g1 is None and g2 is None)
+                        for g1, g2 in zip(self.combined_grads, self.mse_grad))
+                    
+        print(f"Are combined_grads == mse_grad? {are_equal}")
+        print(f"mse_loss requires grad = {self.mse_loss.requires_grad}") 
+        print(f"mse_loss computational graph = {self.mse_loss.grad_fn}")
+        for (name, param), g1, g2, g3 in zip(self.model.named_parameters(), self.mse_grad, self.tv_grad, self.supp_grad):
+            print(f"Param {name} = {param.requires_grad, param.grad.norm()}")
+            print(f"Param {name}: MSE Grad - {g1 is not None}, TV Grad - {g2 is not None}, Supp Grad - {g3 is not None}")   
+            if g1 is not None:
+                
+                print(f"Param {name}: MSE Grad - {g1.norm()}")
+            if g2 is not None:
+                
+                print(f"Param {name}: TV Grad - {g2.norm()}")
+            if g3 is not None:
+                
+                print(f"Param {name}: Supp Grad - {g3.norm()}")
+            
+        for name, param in self.model.named_parameters():
+            print(f"{name}: requires_grad={param.requires_grad}")
+            
+            if not param.requires_grad:
+                print(f"{name} is FROZEN (requires_grad=False)!")
+            if param.grad is None:
+                self.grad_norms[name].append(param.grad.norm().item().cpu().detach().numpy())
+                print(f"{name} has NO gradient!")
+            elif torch.all(param.grad == 0):
+                print(f"{name} has ZERO gradient!")
     
-    def _update_live_loss(self, fig, ax, line_tot,line_mse,line_supp,line_tv, epoch):
+            if param.grad is not None:
+                print(f"Parameter: {name} | Shape: {param.shape} | Grad Norm: {param.grad.norm()}")
+    
+    def _print_verbose(self):
+        # Compute norms
+        self.mse_norm = self._compute_grad_norm(self.mse_grad)
+        self.tv_norm = self._compute_grad_norm(self.tv_grad)
+        self.supp_norm = self._compute_grad_norm(self.supp_grad)
+        self.combined_norm = self._compute_grad_norm(self.combined_grads)
+
+    def _init_live_plot(self):
+        # plotting live loss
+        plt.ion()
+        fig, ax = plt.subplots()
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.set_title("Live Loss Plot")
+        
+        line_mse, = ax.plot([],[])
+        #line_supp, = ax.plot([],[])
+        line_tv, = ax.plot([],[])
+        
+        line_mse.set_label('MSE')
+        #line_supp.set_label('Support')
+        line_tv.set_label('TV')
+        
+        ax.legend()
+        plt.tight_layout()
+        plt.ion()
+        plt.show()
+
+        return fig, ax, line_mse, line_tv#, line_supp
+        
+    def _update_live_loss(self, fig, ax,line_mse,line_tv, epoch):
         """
         Update the live loss plot during training.
 
@@ -804,28 +907,38 @@ class FINN:
             epoch (int): The current epoch number (used to update the plot).
 
         """
-        line_tot.set_xdata(range(self.epochs_passed))
-        line_tot.set_ydata(self.losses)
-        
         
         line_mse.set_xdata(range(self.epochs_passed))
         line_mse.set_ydata(self.main_losses)
-        
-
-        line_supp.set_xdata(range(self.epochs_passed))
-        line_supp.set_ydata(self.supp_losses)
-        
 
         line_tv.set_xdata(range(self.epochs_passed))
-        line_tv.set_ydata(self.tv_losses)
+        #line_tv.set_ydata(self.tv_losses)
+        line_tv.set_ydata(self.main_losses)
         
-
+        #line_supp.set_xdata(range(self.epochs_passed))
+        #line_supp.set_ydata(self.supp_losses)
         
-        ax.set_title(f"Epoch = {self.epochs_passed-1}, Loss = {self.epoch_loss:.3f}")
+        ax.set_title(f"Epoch = {self.epochs_passed-1}, MSE Loss = {self.mse_loss:.2f}, TV Loss = {self.tv_loss:.2f}")
         ax.set_yscale('log')
         ax.relim()
         ax.autoscale_view()
         
+        if self.verbose:
+            total = self.mse_norm + self.tv_norm + self.supp_norm
+            text = (f'Gradient Contributions:\n'
+            f'{"MSE:":<15} {(self.mse_norm/total).item()*100:>5.1f}%\n'
+            f'{"TV:":<15} {(self.tv_norm/total).item()*100:>5.1f}%\n'
+            f'{"Support:":<15} {(self.supp_norm/total).item()*100:>5.1f}%')
+        
+            props = dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray')
+            
+            ax.text(0.95, 0.8, text, 
+                    transform=ax.transAxes,
+                    fontsize=10,
+                    verticalalignment='top',
+                    horizontalalignment='right',
+                    bbox=props)
+            
         clear_output(wait=True)
         display(fig)
             
@@ -929,12 +1042,9 @@ class FINN:
         Plots the loss over epochs.
         """
         plt.figure()
-        plt.plot(self.losses, label = "All Loss")
         plt.plot(self.tv_losses, label = 'TV')
         plt.plot(self.main_losses, label = 'MSE')
-        plt.plot(self.supp_losses, label = 'Support')
-        if self.sec_loss_fn is not None:
-            plt.plot(self.sec_losses, label = "Sec Loss")
+        #plt.plot(self.supp_losses, label = 'Support')
         plt.xlabel("Epochs")
         plt.ylabel("Loss")
         if log_scale:
@@ -1041,13 +1151,9 @@ class FINN:
     
             # Save loss values
             losses = h5f.create_group("Losses")
-            losses.create_dataset("all_loss_values", data=np.array(self.losses), compression="gzip")
             losses.create_dataset("support_loss_values", data=np.array(self.supp_losses), compression="gzip")
             losses.create_dataset("tv_reg_values", data=np.array(self.tv_losses), compression="gzip")
             losses.create_dataset("main_loss_values", data=np.array(self.main_losses), compression="gzip")
-            if self.sec_loss_fn is not None:
-                losses.create_dataset("second loss func", data=np.array(self.sec_losses), compression="gzip")
-        
         
 
 def train_fourier_ptychography(model, target_images, num_epochs=500, lr=0.01):
