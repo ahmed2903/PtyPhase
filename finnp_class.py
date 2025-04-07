@@ -733,12 +733,9 @@ class FINN:
         self.supp_grad = self._normalize_gradients(self.supp_grad)
           
         # Compute the mean of gradients
-        """
         self.combined_grads = [torch.mean(torch.stack([g1 if g1 is not None else g2, 
                                                   g2 if g2 is not None else g1]), dim=0) 
                                               for g1, g2 in zip(self.mse_grad, self.tv_grad)]
-        """
-        self.combined_grads = self.mse_grad
         for param, grad in zip(self.model.parameters(), self.combined_grads):
             param.grad = grad
             
@@ -912,8 +909,8 @@ class FINN:
         line_mse.set_ydata(self.main_losses)
 
         line_tv.set_xdata(range(self.epochs_passed))
-        #line_tv.set_ydata(self.tv_losses)
-        line_tv.set_ydata(self.main_losses)
+        line_tv.set_ydata(self.tv_losses)
+        #line_tv.set_ydata(self.main_losses)
         
         #line_supp.set_xdata(range(self.epochs_passed))
         #line_supp.set_ydata(self.supp_losses)
