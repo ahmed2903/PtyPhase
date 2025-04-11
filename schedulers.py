@@ -55,3 +55,50 @@ class ShrinkWrap():
         
         return self.support
         
+
+class WeightScheduler:
+    def __init__(self, 
+                 start_epoch=0, 
+                 increase_epochs=10, 
+                 plateau_epochs=20,
+                 alpha_max=1.0, 
+                 gamma=0.99, 
+                 min_alpha=0.0):
+        """
+        TV weight scheduler with ramp-up, plateau, and decay phases.
+
+        Args:
+            start_epoch (int): Epoch to start increasing TV weight.
+            increase_epochs (int): Number of epochs to ramp up TV weight.
+            plateau_epochs (int): Number of epochs to hold alpha_max.
+            alpha_max (float): Maximum TV weight value.
+            gamma (float): Decay factor per epoch after plateau.
+            min_alpha (float): Minimum TV weight.
+        """
+        self.start_epoch = start_epoch
+        self.increase_epochs = increase_epochs
+        self.plateau_epochs = plateau_epochs
+        self.alpha_max = alpha_max
+        self.gamma = gamma
+        self.min_alpha = min_alpha
+
+        # Precompute when decay starts
+        self.decay_start_epoch = start_epoch + increase_epochs + plateau_epochs
+
+    def get_alpha(self, epoch):
+        if epoch < self.start_epoch:
+            return 0.0
+        
+        # Ramp-up phase
+        if epoch < self.start_epoch + self.increase_epochs:
+            progress = (epoch - self.start_epoch) / self.increase_epochs
+            return progress * self.alpha_max
+        
+        # Plateau phase
+        if epoch < self.decay_start_epoch:
+            return self.alpha_max
+        
+        # Decay phase
+        decay_epochs = epoch - self.decay_start_epoch
+        decayed_alpha = self.alpha_max * (self.gamma ** decay_epochs)
+        return max(decayed_alpha, self.min_alpha)
