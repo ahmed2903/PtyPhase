@@ -14,11 +14,13 @@ from .plotting import plot_images_side_by_side, update_live_plot, initialize_liv
 
 class EPRy:
     
-    def __init__(self, images, pupil_func: str, kout_vec, lr_psize, 
+    def __init__(self, images, pupil_func: str, kout_vec, ks_pupil, lr_psize, 
                  num_iter=50, alpha=0.1, beta=0.1, hr_obj_image=None, hr_fourier_image=None):
+        
         self.images = images
         self.pupil_func = pupil_func
         self.kout_vec = kout_vec
+        self.ks_pupil = ks_pupil
         self.lr_psize = lr_psize
         
         self.num_iter = num_iter
@@ -26,22 +28,24 @@ class EPRy:
         self.beta = beta
 
         self.hr_obj_image = hr_obj_image
-        self.hr_fourier_image = hr_fourier_image 
+        self.hr_fourier_image = hr_fourier_image  
         
 
 
     def prepare(self, **kwargs):
-
-        
-        
-
+        print("Preparing")
         if 'zoom_factor' in kwargs:
             self.zoom_factor = kwargs['zoom_factor']
-        
+
+        if 'extend' in kwargs:
+            extend = kwargs['extend']
+        else:
+            extend = None
+            
         self._prep_images()
         
         self.kout_vec = np.array(self.kout_vec)
-        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.kout_vec, self.lr_psize, extend_to_double = False)
+        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.ks_pupil, self.lr_psize, extend = extend)
         self.kx_min_n, self.kx_max_n = self.bounds_x
         self.ky_min_n, self.ky_max_n = self.bounds_y
         self.dkx, self.dky = self.dks
@@ -54,27 +58,45 @@ class EPRy:
 
     def _prep_images(self):
 
-        self.images = np.array(self.images)
+        self.images = np.abs(np.array(self.images))
         
     def _load_pupil(self):
         
         dims = round((self.kx_max_n - self.kx_min_n)/self.dkx), round((self.ky_max_n - self.ky_min_n)/self.dky)
-
+        dims = make_dims_even(dims)
+        full_array = np.zeros(dims)
+        
         if isinstance(self.pupil_func, str):
             phase = np.load(self.pupil_func)
         elif isinstance(self.pupil_func, np.ndarray):
             phase = self.pupil_func
         else:
             phase = np.zeros(dims)
+        
+        # Get the scaling factors for each dimension
+        scale_x = dims[0] / phase.shape[0] / 2
+        scale_y = dims[1] / phase.shape[1] / 2 
 
-        phase = downsample_array(phase, dims)
-        self.pupil_func = np.exp(1j*phase)
+        # Scale the pupil phase array to match the required pupil dimensions
+        scaled_pupil_phase = zoom(phase, (scale_x, scale_y))
+
+        # Calculate center indices
+        N, M = dims[0]//2, dims[1]//2
+        
+        start_x, start_y = (dims[0] - N) // 2, (dims[1] - M) // 2
+        end_x, end_y = start_x + N, start_y + M
+    
+        # Set central region to ones
+        full_array[start_x:end_x, start_y:end_y] = scaled_pupil_phase
+        
+        self.pupil_func = np.exp(1j*full_array)
     
     def _initiate_recons_images(self):
+
         
         if self.hr_obj_image is None or self.hr_fourier_image is None:
             self.hr_obj_image, self.hr_fourier_image = init_hr_image(self.bounds_x, self.bounds_y, self.dks)
-
+        
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
         
@@ -85,11 +107,18 @@ class EPRy:
         
         for it in range(self.num_iter):
             print(f"Iteration {it+1}/{self.num_iter}")
+            
             for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]), 
                                                                desc="Processing", total=len(self.images), unit="images")):
+
                 
                 self._update_spectrum(image, kx_iter, ky_iter)
-
+                
+                if np.any(np.isnan(self.hr_fourier_image)):
+                    raise ValueError(f"There is a Nan in the Fourier image for {it}-th iteration,{i}-th image")
+                if np.any(np.isnan(self.hr_obj_image)):
+                    raise ValueError(f"There is a Nan in the Object image for {it}-th iteration,{i}-th image")
+                
             if live_plot:
                 # Update the HR object image after all spectrum updates in this iteration
                 self.hr_obj_image = fftshift(ifft2(ifftshift(self.hr_fourier_image)))
@@ -116,17 +145,28 @@ class EPRy:
         
         pupil_func_patch = self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
         image_FT = self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx] * pupil_func_patch
-        image_FT *= self.nx_lr/self.nx_hr
+        image_FT *= (self.nx_lr/self.nx_hr)**2
         
         image_lr = fftshift(ifft2(ifftshift(image_FT)))
         image_lr_update = np.sqrt(image) * np.exp(1j * np.angle(image_lr))
-        image_FT_update = fftshift(fft2(ifftshift(image_lr_update))) * ( 1/ (pupil_func_patch +1e-23))
-        image_lr_update *= self.nx_hr/self.nx_lr
+        inv_pupil_func = 1/ (pupil_func_patch +1e-8)
+        image_FT_update = fftshift(fft2(ifftshift(image_lr_update))) * inv_pupil_func
+        image_lr_update *= (self.nx_hr/self.nx_lr)**2
         weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
+        if np.any(np.isnan(np.sqrt(image))):
+            raise ValueError(f"There is a Nan in the image")
+        if np.any(np.isnan(np.angle(image_lr))):
+            raise ValueError(f"There is a Nan in the image_lr")
+        if np.any(np.isnan(image_lr_update)):
+            raise ValueError(f"There is a Nan in the image_lr_update")
 
         delta_lowres_ft = image_FT_update - image_FT
         self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += delta_lowres_ft *  weight_fac_pupil
-
+        
+        # Update Pupil Function 
+        # weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx])
+        # self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += weight_factor_obj * delta_lowres_ft
+        
     def plot_rec_obj(self, 
                      vmin1= None, vmax1=None, 
                      vmin2= -np.pi, vmax2=np.pi, 
@@ -172,8 +212,8 @@ class EPRy_lr(EPRy):
     
     
     def _initiate_recons_images(self):
-        
         if self.hr_obj_image is None or self.hr_fourier_image is None: 
+            print("Ones")
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
         
@@ -192,12 +232,10 @@ class EPRy_lr(EPRy):
         
         pupil_func_patch = self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
         image_FT = self.hr_fourier_image * pupil_func_patch
-        image_FT *= self.nx_lr/self.nx_hr 
         
         image_lr = fftshift(ifft2(ifftshift(image_FT)))
         image_lr_update = np.sqrt(image) * np.exp(1j * np.angle(image_lr))
-        image_FT_update = fftshift(fft2(ifftshift(image_lr_update))) * ( 1/ (pupil_func_patch +1e-23))
-        image_lr_update *= self.nx_hr/self.nx_lr
+        image_FT_update = fftshift(fft2(ifftshift(image_lr_update))) #* ( 1/ (pupil_func_patch +1e-23))
 
         weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
         
@@ -211,7 +249,6 @@ class EPRy_lr(EPRy):
         # Update Pupil Function 
         weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image)
         self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += weight_factor_obj * delta_lowres_ft
-
 
 
 class EPRy_upsample(EPRy):
@@ -238,6 +275,7 @@ class EPRy_upsample(EPRy):
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
 
     def _update_spectrum(self, image, kx_iter, ky_iter):
+        
         """Handles the Fourier domain update."""
         kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
         kx_lidx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx), 0))

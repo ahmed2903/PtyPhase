@@ -132,6 +132,7 @@ class FINN:
         self.supp_losses = []
         self.main_losses = []
         self.sec_loss_fn = None
+        self.pupil_optimiser = None
         self.epochs_passed = 0
         self.num_epochs = 0 
         self.grad_norms = {}
@@ -356,7 +357,9 @@ class FINN:
         if not "lr" in optimiser_args:
             raise ValueError("Learning rate must be passed")
         
-        self.spectrum_optimiser = optimiser([self.model.spectrum_amp, self.model.spectrum_pha, self.model.pupil_amp, self.model.pupil_pha], **optimiser_args)
+        self.spectrum_optimiser = optimiser([self.model.spectrum_amp, self.model.spectrum_pha], 
+                                             #self.model.pupil_amp, self.model.pupil_pha], 
+                                            **optimiser_args)
         
     def set_pupil_optimiser(self, optimiser, freeze_pupil_amp = False, **kwargs):
         """
@@ -457,7 +460,7 @@ class FINN:
         
         return tv
 
-    def set_tv_param(self, alpha):
+    def set_tv_param(self, alpha_min, alpha_max):
         """
         Initialize the alpha tv scheduler.
 
@@ -471,7 +474,8 @@ class FINN:
             gamma (float): Multiplicative factor for updating alpha. (Default = 1)
 
         """
-        self.alpha = alpha
+        self.alpha_min = alpha_min
+        self.alpha_max = alpha_max
         
     def update_alpha(self, epoch):
         """
@@ -655,7 +659,10 @@ class FINN:
 
         
             # Compute gradients
-            self._compute_gradients()
+            #self._compute_gradients()
+            #self._compute_adaptive_gradients()
+            self.mse_loss.backward()
+            
             # Update Parameters
             current_optimizer.step()    
             current_schedular.step()
@@ -709,7 +716,6 @@ class FINN:
 
         
         # Compute the total norm of all gradients (treat as one vector)
-        #total_norm = torch.norm(torch.stack([torch.norm(g) for g in non_none_grads]))
         total_norm = torch.sqrt(sum(torch.norm(g, p=2) ** 2 for g in non_none_grads))
         
         # Normalize each gradient (avoid division by zero)
@@ -733,12 +739,66 @@ class FINN:
         self.supp_grad = self._normalize_gradients(self.supp_grad)
           
         # Compute the mean of gradients
-        self.combined_grads = [torch.mean(torch.stack([g1 if g1 is not None else g2, 
-                                                  g2 if g2 is not None else g1]), dim=0) 
-                                              for g1, g2 in zip(self.mse_grad, self.tv_grad)]
+        combined_grad = []
+        
+        # Loop over gradients and compute combined gradient
+        for g_mse, g_tv in zip(self.mse_grad, self.tv_grad):
+            if g_mse is None and g_tv is None:
+                combined_grad.append(None)
+                continue
+            if g_mse is None:
+                g = g_tv
+            elif g_tv is None:
+                g = g_mse 
+            else:
+                g = (g_mse + g_tv)/2
+                
+            combined_grad.append(g)
+
+        self.combined_grads = combined_grad
+        
         for param, grad in zip(self.model.parameters(), self.combined_grads):
             param.grad = grad
             
+    def _compute_adaptive_gradients(self):
+        
+        eps = 1e-8
+        
+        # Adaptive TV Weight
+        alpha_tv = self.mse_loss.item() / (self.tv_loss.item() + eps)
+        alpha_tv = max(self.alpha_min, min(alpha_tv, self.alpha_max))  # Clamp alpha_tv
+
+        # Compute independent gradients 
+        self.tv_grad = torch.autograd.grad(self.tv_loss, self.model.parameters(), retain_graph=True, allow_unused=True)
+        self.mse_grad = torch.autograd.grad(self.mse_loss, self.model.parameters(), retain_graph = True) 
+        
+        # Normalise gradients 
+        #self.tv_grad = self._normalize_gradients(self.tv_grad)
+        #self.mse_grad = self._normalize_gradients(self.mse_grad)
+        
+        combined_grad = []
+        
+        # Loop over gradients and compute combined gradient
+        for g_mse, g_tv in zip(self.mse_grad, self.tv_grad):
+
+            if g_mse is None and g_tv is None:
+                combined_grad.append(None)
+                continue
+
+            if g_mse is None:
+                g = alpha_tv * g_tv
+            elif g_tv is None:
+                g = g_mse 
+            else:
+                g = g_mse + alpha_tv * g_tv
+
+            combined_grad.append(g)
+
+        self.combined_grads = combined_grad
+        
+        for param, grad in zip(self.model.parameters(), self.combined_grads):
+            param.grad = grad
+        
     def _get_current_object_image(self):
         """
         Private method for updating the reconstructed object. 
@@ -778,8 +838,13 @@ class FINN:
         
         tv_reg = self.tv_regularization(self.recon_obj_tensor)
         supp_loss = self.support_penalty(self.recon_obj_tensor)
+
+        # Amplitude Based
+        # loss = self.loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
+
+        # Intensity Based
+        loss = self.loss_fn(torch.abs(low_resolution_image)**2, torch.abs(image))
         
-        loss = self.loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
         self.mse_loss += self.beta * loss
         self.tv_loss += tv_reg
         self.supp_loss += supp_loss            
@@ -1081,7 +1146,8 @@ class FINN:
         "coherent_image_dims": self.image_dims,
         }
         optimiser_spectrum = {**self.spectrum_optimiser.param_groups[0]}
-        #optimiser_pupil = {**self.pupil_optimiser.param_groups[0]}
+        if self.pupil_optimiser is not None:
+            optimiser_pupil = {**self.pupil_optimiser.param_groups[0]}
 
         kbounds = {
         "bounds_kx": str(self.bounds_x),
