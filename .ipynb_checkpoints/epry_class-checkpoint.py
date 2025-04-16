@@ -14,8 +14,7 @@ from .plotting import plot_images_side_by_side, update_live_plot, initialize_liv
 
 class EPRy:
     
-    def __init__(self, images, pupil_func: str, kout_vec, ks_pupil, lr_psize, 
-                 num_iter=50, alpha=0.1, beta=0.1, hr_obj_image=None, hr_fourier_image=None):
+    def __init__(self, images, pupil_func: str, kout_vec, ks_pupil, lr_psize, alpha=0.1, beta=0.1, hr_obj_image=None, hr_fourier_image=None):
         
         self.images = images
         self.pupil_func = pupil_func
@@ -23,14 +22,14 @@ class EPRy:
         self.ks_pupil = ks_pupil
         self.lr_psize = lr_psize
         
-        self.num_iter = num_iter
         self.alpha = alpha
         self.beta = beta
-
+        self.iters_passed = 0
         self.hr_obj_image = hr_obj_image
         self.hr_fourier_image = hr_fourier_image  
         
 
+    ############################# Prepare ################################
 
     def prepare(self, **kwargs):
         print("Preparing")
@@ -99,14 +98,14 @@ class EPRy:
         
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
-        
-    def iterate(self, live_plot=False):
+
+    ################################## Main Loop ##################################
+    def iterate(self, iterations:int, live_plot=False):
 
         if live_plot:
-            fig, ax, img_amp, img_phase = initialize_live_plot(self.hr_obj_image, self.hr_fourier_image)
+            fig, ax, img_amp, img_phase = self._initialize_live_plot()
         
-        for it in range(self.num_iter):
-            print(f"Iteration {it+1}/{self.num_iter}")
+        for it in range(iterations):
             
             for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]), 
                                                                desc="Processing", total=len(self.images), unit="images")):
@@ -122,9 +121,9 @@ class EPRy:
             if live_plot:
                 # Update the HR object image after all spectrum updates in this iteration
                 self.hr_obj_image = fftshift(ifft2(ifftshift(self.hr_fourier_image)))
-                update_live_plot(img_amp, img_phase, self.hr_obj_image, self.hr_fourier_image, fig)
-            
-        
+                self._update_live_plot(img_amp, img_phase, fig, it)
+    
+        self.iters_passed += 1
         self.hr_obj_image = fftshift(ifft2(ifftshift(self.hr_fourier_image)))
         
     def compute_weight_fac(self, func):
@@ -138,7 +137,7 @@ class EPRy:
         kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
         kx_lidx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx), 0))
         kx_hidx = round(kx_cidx + self.omega_obj_x / (2 * self.dkx)) + (1 if self.nx_lr % 2 != 0 else 0)
-
+        
         ky_cidx = round((ky_iter - self.ky_min_n) / self.dky)
         ky_lidx = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
         ky_hidx = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
@@ -152,7 +151,11 @@ class EPRy:
         inv_pupil_func = 1/ (pupil_func_patch +1e-8)
         image_FT_update = fftshift(fft2(ifftshift(image_lr_update))) * inv_pupil_func
         image_lr_update *= (self.nx_hr/self.nx_lr)**2
+        
+        # Compute update weight factor
         weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
+        weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx])
+
         if np.any(np.isnan(np.sqrt(image))):
             raise ValueError(f"There is a Nan in the image")
         if np.any(np.isnan(np.angle(image_lr))):
@@ -160,13 +163,75 @@ class EPRy:
         if np.any(np.isnan(image_lr_update)):
             raise ValueError(f"There is a Nan in the image_lr_update")
 
+        # Difference of exit waves 
         delta_lowres_ft = image_FT_update - image_FT
+
+        # Update Fourier Spectrum
         self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += delta_lowres_ft *  weight_fac_pupil
         
         # Update Pupil Function 
-        weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx])
         self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += weight_factor_obj * delta_lowres_ft
+
+    ################################# Plotting ###############################
+
+    def _initialize_live_plot(self):
+        """
+        Initializes the live plot with two subplots: one for amplitude and one for phase.
         
+        Returns:
+            fig, ax: Matplotlib figure and axes.
+            img_amp, img_phase: Image objects for real-time updates.
+        """
+    
+        # Initialize empty images
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+                
+        # Initialize the plots with the initial image
+        img_amp = axes[0].imshow(np.abs(self.hr_obj_image), vmin =.2, vmax = 1, cmap='viridis')
+        axes[0].set_title("Object Object")
+        cbar_amp = plt.colorbar(img_amp, ax=axes[0])
+    
+        img_phase = axes[1].imshow(np.abs(self.hr_fourier_image), cmap='viridis')
+        axes[1].set_title("Fourier Amplitude")
+        cbar_phase = plt.colorbar(img_phase, ax=axes[1])
+    
+        plt.tight_layout()
+        plt.ion()  # Enable interactive mode
+        plt.show()
+    
+        return fig, axes, img_amp, img_phase
+    
+    def _update_live_plot(self, img_amp, img_phase, fig, it):
+        """
+        Updates the live plot with new amplitude and phase images.
+    
+        Args:
+            img_amp: Matplotlib image object for amplitude.
+            img_phase: Matplotlib image object for phase.
+            hr_obj_image: The complex object image to be plotted.
+        """
+        amplitude_obj = np.abs(self.hr_obj_image)
+        amplitude_ft = np.abs(self.hr_fourier_image)
+        
+        img_amp.set_data(amplitude_obj)  # Normalize for visibility
+        img_phase.set_data(amplitude_ft)
+    
+        amp_mean = np.mean(amplitude_obj)
+        vmin = max(amp_mean - 0.1 * amp_mean, 0)
+        vmax = amp_mean + 2 * amp_mean
+        img_amp.set_clim(vmin, vmax)
+    
+        ft_mean = np.mean(amplitude_ft)
+        vmin = ft_mean - 0.1 * ft_mean
+        vmax = ft_mean + 2 * ft_mean
+        img_phase.set_clim(vmin, vmax)
+        
+        fig.suptitle(f"Iteration: {it}", fontsize=12)
+    
+        clear_output(wait=True)
+        display(fig)
+        fig.canvas.flush_events()
+    
     def plot_rec_obj(self, 
                      vmin1= None, vmax1=None, 
                      vmin2= -np.pi, vmax2=np.pi, 

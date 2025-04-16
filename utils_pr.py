@@ -97,7 +97,7 @@ def init_hr_image(bounds_x, bounds_y, dks):
         
     # High-resolution Object and Fourier spaces
     hr_obj_image = np.ones((nkx, nky), dtype=complex)
-    hr_fourier_image = fftshift(fft2(ifftshift(hr_obj_image)))
+    hr_fourier_image =  np.ones((nkx, nky), dtype=complex) #fftshift(fft2(ifftshift(hr_obj_image)))
 
     return hr_obj_image, hr_fourier_image
 

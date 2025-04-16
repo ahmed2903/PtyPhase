@@ -127,7 +127,7 @@ def initialize_live_plot(hr_obj_image, hr_fourier_obj):
 
     return fig, axes, img_amp, img_phase
 
-def update_live_plot(img_amp, img_phase, hr_obj_image, hr_fourier_obj, fig):
+def update_live_plot(img_amp, img_phase, hr_obj_image, hr_fourier_obj, fig, it):
     """
     Updates the live plot with new amplitude and phase images.
 
@@ -152,6 +152,8 @@ def update_live_plot(img_amp, img_phase, hr_obj_image, hr_fourier_obj, fig):
     vmax = ft_mean + 2 * ft_mean
     img_phase.set_clim(vmin, vmax)
     
+    fig.suptitle(f"Iteration: {it}", fontsize=12)
+
     clear_output(wait=True)
     display(fig)
     fig.canvas.flush_events()

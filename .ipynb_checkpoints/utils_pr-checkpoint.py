@@ -66,7 +66,7 @@ def prepare_dims(images, pupil_kins, lr_psize, extend = None, band_multiplier = 
         ky_min = ky_min - range_y/2
         ky_max = ky_max + range_y/2
 
-        
+    # FIX ME!!!
     elif extend == 'by_bandwidth':
         # Object bandwidth 
         omega_obj_x, omega_obj_y = calc_obj_freq_bandwidth(lr_psize)
@@ -97,7 +97,7 @@ def init_hr_image(bounds_x, bounds_y, dks):
         
     # High-resolution Object and Fourier spaces
     hr_obj_image = np.ones((nkx, nky), dtype=complex)
-    hr_fourier_image = fftshift(fft2(ifftshift(hr_obj_image)))
+    hr_fourier_image =  np.ones((nkx, nky), dtype=complex) #fftshift(fft2(ifftshift(hr_obj_image)))
 
     return hr_obj_image, hr_fourier_image
 
