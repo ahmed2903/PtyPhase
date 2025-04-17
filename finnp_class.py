@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.fft as fft
+from torch.fft import ffshift, ifftshift, fft2,ifft2
+
 import torch.nn.functional as F 
 from torch.nn.utils import clip_grad_norm_
 import inspect
@@ -86,7 +88,7 @@ class ForwardModel(nn.Module):
         forward_spectrum = spectrum * pupil_patch
 
         # Inverse Fourier Transform to simulate low-resolution image
-        low_res_image = fft.fftshift(fft.ifft2(fft.ifftshift(forward_spectrum)))
+        low_res_image = ifft2(ifftshift(forward_spectrum))
 
         low_res_amp = torch.abs(low_res_image)
         low_res_pha = torch.angle(low_res_image)
@@ -529,7 +531,7 @@ class FINN:
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum)))
+        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
@@ -591,7 +593,7 @@ class FINN:
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
         self.recon_spectrum = self.recon_spectrum.cpu().numpy()
         
-        self.recon_obj = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(self.recon_spectrum)))
+        self.recon_obj = np.fft.ifft2(np.fft.ifftshift(self.recon_spectrum))
         
         pupil_amp = self.model.pupil_amp.detach()  # Detach from computation graph
         pupil_pha = self.model.pupil_pha.detach()
@@ -916,7 +918,7 @@ class FINN_alphatv(FINN):
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum)))
+        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
@@ -1265,7 +1267,7 @@ class FINN_support(FINN):
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum)))
+        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
@@ -1714,7 +1716,7 @@ class FINN_mgd(FINN):
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum)))
+        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
@@ -2076,7 +2078,7 @@ class FINN_adamgd(FINN):
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum)))
+        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
