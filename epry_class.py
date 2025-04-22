@@ -17,6 +17,8 @@ class EPRy:
     def __init__(self, images, pupil_func: str, kout_vec, ks_pupil, lr_psize, alpha=0.1, beta=0.1, hr_obj_image=None, hr_fourier_image=None):
         
         self.images = images
+        self.num_images = self.images.shape[0]
+        
         self.pupil_func = pupil_func
         self.kout_vec = kout_vec
         self.ks_pupil = ks_pupil
@@ -27,7 +29,8 @@ class EPRy:
         self.hr_obj_image = hr_obj_image
         self.hr_fourier_image = hr_fourier_image  
         
-        self.loss = []
+        self.losses = []
+        self.iters_passed = 0
 
     ############################# Prepare ################################
 
@@ -58,6 +61,7 @@ class EPRy:
     def _prep_images(self):
 
         self.images = np.abs(np.array(self.images))
+        
         
     def _load_pupil(self):
         
@@ -103,7 +107,7 @@ class EPRy:
     def iterate(self, iterations:int, live_plot=False):
 
         if live_plot:
-            fig, ax, img_amp, img_phase = self._initialize_live_plot()
+            fig, ax, img_amp, img_phase, fourier_amp, loss_im, axes = self._initialize_live_plot()
         
         for it in range(iterations):
             
@@ -122,9 +126,10 @@ class EPRy:
             if live_plot:
                 # Update the HR object image after all spectrum updates in this iteration
                 self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
-                self._update_live_plot(img_amp, img_phase, fig, it)
+                self._update_live_plot(img_amp, img_phase, fourier_amp, loss_im, fig, it, axes)
 
-            self.loss.append[self.iter_loss]
+            self.losses.append(self.iter_loss/self.num_images)
+            self.iters_passed += 1
         self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
         
     def compute_weight_fac(self, func):
@@ -195,23 +200,24 @@ class EPRy:
         """
     
         # Initialize empty images
-        fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+        fig, axes = plt.subplots(2, 2, figsize=(8, 8))
                 
         # Initialize the plots with the initial image
         img_amp = axes[0,0].imshow(np.abs(self.hr_obj_image), vmin =.2, vmax = 1, cmap='viridis')
         axes[0,0].set_title("Object Amplitude")
-        cbar_amp = plt.colorbar(img_amp, ax=axes[0])
+        cbar_amp = plt.colorbar(img_amp, ax=axes[0,0])
 
         img_phase = axes[0,1].imshow(np.angle(self.hr_obj_image), cmap='viridis')
         axes[0,1].set_title("Object Phase")
-        cbar_phase = plt.colorbar(img_phase, ax=axes[1])
+        img_phase.set_clim(-np.pi, np.pi)
+        cbar_phase = plt.colorbar(img_phase, ax=axes[0,1])
         
         
         fourier_amp = axes[1,0].imshow(np.abs(self.hr_fourier_image), cmap='viridis')
         axes[1,0].set_title("Fourier Amplitude")
-        cbar_fourier = plt.colorbar(fourier_amp, ax=axes[1])
+        cbar_fourier = plt.colorbar(fourier_amp, ax=axes[1,0])
         
-        loss = axes[1,1].plot(self.loss)
+        loss_im, = axes[1,1].plot([],[])
         axes[1,1].set_xlabel("iteration")
         axes[1,1].set_ylabel("loss")
 
@@ -219,9 +225,9 @@ class EPRy:
         plt.ion()  # Enable interactive mode
         plt.show()
     
-        return fig, axes, img_amp, img_phase, fourier_amp, loss
+        return fig, axes, img_amp, img_phase, fourier_amp, loss_im, axes
     
-    def _update_live_plot(self, img_amp, img_phase, fourier_amp, loss, fig, it):
+    def _update_live_plot(self, img_amp, img_phase, fourier_amp, loss_im, fig, it, axes):
         """
         Updates the live plot with new amplitude and phase images.
     
@@ -237,20 +243,26 @@ class EPRy:
         img_amp.set_data(amplitude_obj)  # Normalize for visibility
         img_phase.set_data(phase_obj)
         fourier_amp.set_data(amplitude_ft)
-        loss.set_data(self.loss)
         
-        # amp_mean = np.mean(amplitude_obj)
-        # vmin = max(amp_mean - 0.1 * amp_mean, 0)
-        # vmax = amp_mean + 2 * amp_mean
-        # img_amp.set_clim(vmin, vmax)
+        loss_im.set_xdata(range(self.iters_passed))
+        loss_im.set_ydata(self.losses)
+
+        axes[1,1].set_title(f"Iteration: {it}, loss: {self.iter_loss/self.num_images:.2f}", fontsize=12)
+        axes[1,1].relim()
+        axes[1,1].autoscale_view()
+        if it>1:
+            axes[1,1].set_yscale('log')
+
+        amp_mean = np.mean(amplitude_obj)
+        vmin = max(amp_mean - 0.1 * amp_mean, 0)
+        vmax = amp_mean + 2 * amp_mean
+        img_amp.set_clim(vmin, vmax)
     
-        # ft_mean = np.mean(amplitude_ft)
-        # vmin = ft_mean - 0.1 * ft_mean
-        # vmax = ft_mean + 2 * ft_mean
-        # img_phase.set_clim(vmin, vmax)
-        
-        fig.suptitle(f"Iteration: {it}", fontsize=12)
-    
+        ft_mean = np.mean(amplitude_ft)
+        vmin = ft_mean - 0.1 * ft_mean
+        vmax = ft_mean + 2 * ft_mean
+        fourier_amp.set_clim(vmin, vmax)
+            
         clear_output(wait=True)
         display(fig)
         fig.canvas.flush_events()
@@ -323,7 +335,7 @@ class EPRy_lr(EPRy):
         
         #image_lr = fftshift(ifft2(ifftshift(image_FT)))
         image_lr = ifft2(ifftshift(image_FT))
-        
+    
         image_lr_update = np.sqrt(image) * np.exp(1j * np.angle(image_lr))
         image_FT_update = fftshift(fft2(image_lr_update)) #* ( 1/ (pupil_func_patch +1e-23))
 
@@ -427,7 +439,7 @@ class EPRy_upsample(EPRy):
         image_lr = ifft2(ifftshift(image_FT))
         image_lr_update = np.sqrt(image) * np.exp(1j * np.angle(image_lr))
         image_lr_update *= self.nx_hr/self.nx_lr
-        image_FT_update = fftshift(fft2(image_lr_update)) * ( 1/ (pupil_func_patch +1e-23))
+        image_FT_update = fftshift(fft2(image_lr_update)) #* ( 1/ (pupil_func_patch +1e-23))
         
 
         weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
