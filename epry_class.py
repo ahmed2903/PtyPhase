@@ -329,10 +329,16 @@ class EPRy_lr(EPRy):
     
     
     def _initiate_recons_images(self):
-        if self.hr_obj_image is None or self.hr_fourier_image is None: 
+        if self.hr_obj_image is None and self.hr_fourier_image is None: 
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
         
+        elif self.hr_obj_image is not None:
+            self.hr_fourier_image = fftshift(fft2(self.hr_obj_image))
+            
+        elif self.hr_fourier_image is not None:
+            self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
+            
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
 
@@ -408,10 +414,16 @@ class EPRy_fsc_lr(EPRy):
         self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
         
     def _initiate_recons_images(self):
-        if self.hr_obj_image is None or self.hr_fourier_image is None: 
+        if self.hr_obj_image is None and self.hr_fourier_image is None: 
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
         
+        elif self.hr_obj_image is not None:
+            self.hr_fourier_image = fftshift(fft2(self.hr_obj_image))
+            
+        elif self.hr_fourier_image is not None:
+            self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
+            
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
 
@@ -537,10 +549,16 @@ class EPRy_upsample(EPRy):
         
     def _initiate_recons_images(self):
         
-        if self.hr_obj_image is None or self.hr_fourier_image is None: 
+        if self.hr_obj_image is None and self.hr_fourier_image is None: 
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
         
+        elif self.hr_obj_image is not None:
+            self.hr_fourier_image = fftshift(fft2(self.hr_obj_image))
+            
+        elif self.hr_fourier_image is not None:
+            self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
+            
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
 
@@ -591,10 +609,16 @@ class EPRy_pad(EPRy):
         
     def _initiate_recons_images(self):
         
-        if self.hr_obj_image is None or self.hr_fourier_image is None: 
+        if self.hr_obj_image is None and self.hr_fourier_image is None: 
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
         
+        elif self.hr_obj_image is not None:
+            self.hr_fourier_image = fftshift(fft2(self.hr_obj_image))
+            
+        elif self.hr_fourier_image is not None:
+            self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
+            
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
         
