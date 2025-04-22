@@ -308,13 +308,19 @@ class EPRy:
                                  vmin2= vmin2, vmax2=vmax2, 
                                  title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
 
+    def plot_losses(self):
 
+        plt.figure()
+        plt.plot(self.losses)
+        plt.xlabel("Iteration")
+        plt.ylabel("Error")
+        plt.title("Error Graph")
+        
 class EPRy_lr(EPRy):
     
     
     def _initiate_recons_images(self):
         if self.hr_obj_image is None or self.hr_fourier_image is None: 
-            print("Ones")
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
         
@@ -378,8 +384,9 @@ class EPRy_fsc_lr(EPRy):
                 if np.any(np.isnan(self.hr_obj_image)):
                     raise ValueError(f"There is a Nan in the Object image for {it}-th iteration,{i}-th image")
             
-            if self.iters_passed>= start_fsc:
-                self._center_fourier_spectrum
+            if self.iters_passed == start_fsc:
+                print("fourier space constraint")
+                self._center_fourier_spectrum()
                 
             if live_plot:
                 # Update the HR object image after all spectrum updates in this iteration
@@ -393,7 +400,6 @@ class EPRy_fsc_lr(EPRy):
         
     def _initiate_recons_images(self):
         if self.hr_obj_image is None or self.hr_fourier_image is None: 
-            print("Ones")
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
         
@@ -401,7 +407,7 @@ class EPRy_fsc_lr(EPRy):
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
 
     def _center_fourier_spectrum(self):
-        
+        print("here")
         F = self.hr_fourier_image
         power = np.abs(F) ** 2
 
@@ -423,6 +429,7 @@ class EPRy_fsc_lr(EPRy):
         shift_x = -round(cx_target - cx)
         shift_y = -round(cy_target - cy)
 
+        print(shift_y, shift_x)
         # Apply shift to recenter spectrum (fractional pixel shift allowed)
         self.hr_fourier_image = fft2(fourier_shift(ifft2(F), shift=(shift_y, shift_x)))
 

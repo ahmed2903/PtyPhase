@@ -9,6 +9,7 @@ from tqdm.notebook import tqdm
 
 from .utils_pr import *
 from .plotting import plot_images_side_by_side, update_live_plot, initialize_live_plot
+from scipy.ndimage import fourier_shift
 
 #from ..data_fs import * #downsample_array, upsample_images, pad_to_double
 
@@ -307,13 +308,19 @@ class EPRy:
                                  vmin2= vmin2, vmax2=vmax2, 
                                  title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
 
+    def plot_losses(self):
 
+        plt.figure()
+        plt.plot(self.losses)
+        plt.xlabel("Iteration")
+        plt.ylabel("Error")
+        plt.title("Error Graph")
+        
 class EPRy_lr(EPRy):
     
     
     def _initiate_recons_images(self):
         if self.hr_obj_image is None or self.hr_fourier_image is None: 
-            print("Ones")
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
         
@@ -344,6 +351,113 @@ class EPRy_lr(EPRy):
         # Update fourier spectrum
         delta_lowres_ft = image_FT_update - image_FT
         self.hr_fourier_image += delta_lowres_ft *  weight_fac_pupil
+
+        if np.any(np.isnan(self.hr_fourier_image)):
+            raise ValueError("There is a Nan value, check the configurations ")
+            
+        # Update Pupil Function 
+        weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image)
+        self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += weight_factor_obj * delta_lowres_ft
+
+        image_lr_new = np.abs(ifft2(ifftshift(self.hr_fourier_image*self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx])))**2
+        
+        self.iter_loss+=self._compute_loss(image_lr_new, image)
+
+class EPRy_fsc_lr(EPRy):
+    
+    def iterate(self, iterations:int, start_fsc:int, live_plot=False):
+
+        if live_plot:
+            fig, ax, img_amp, img_phase, fourier_amp, loss_im, axes = self._initialize_live_plot()
+        
+        for it in range(iterations):
+            
+            self.iter_loss = 0
+            for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]), 
+                                                               desc="Processing", total=len(self.images), unit="images")):
+
+                
+                self._update_spectrum(image, kx_iter, ky_iter)
+                
+                if np.any(np.isnan(self.hr_fourier_image)):
+                    raise ValueError(f"There is a Nan in the Fourier image for {it}-th iteration,{i}-th image")
+                if np.any(np.isnan(self.hr_obj_image)):
+                    raise ValueError(f"There is a Nan in the Object image for {it}-th iteration,{i}-th image")
+            
+            if self.iters_passed == start_fsc:
+                print("fourier space constraint")
+                self._center_fourier_spectrum()
+                
+            if live_plot:
+                # Update the HR object image after all spectrum updates in this iteration
+                self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
+                self._update_live_plot(img_amp, img_phase, fourier_amp, loss_im, fig, it, axes)
+
+            self.losses.append(self.iter_loss/self.num_images)
+            self.iters_passed += 1
+            
+        self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
+        
+    def _initiate_recons_images(self):
+        if self.hr_obj_image is None or self.hr_fourier_image is None: 
+            self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
+            self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
+        
+        self.nx_lr, self.ny_lr = self.images[0].shape
+        self.nx_hr, self.ny_hr = self.hr_obj_image.shape
+
+    def _center_fourier_spectrum(self):
+        print("here")
+        F = self.hr_fourier_image
+        power = np.abs(F) ** 2
+
+        # Create coordinate grids
+        ny, nx = F.shape
+        x = np.arange(nx)
+        y = np.arange(ny)
+        X, Y = np.meshgrid(x, y)
+
+        # Compute weighted centroid
+        total_power = np.sum(power) + 1e-8
+        cx = np.sum(X * power) / total_power
+        cy = np.sum(Y * power) / total_power
+
+        # Desired center
+        cx_target = nx // 2
+        cy_target = ny // 2
+
+        shift_x = -round(cx_target - cx)
+        shift_y = -round(cy_target - cy)
+
+        print(shift_y, shift_x)
+        # Apply shift to recenter spectrum (fractional pixel shift allowed)
+        self.hr_fourier_image = fft2(fourier_shift(ifft2(F), shift=(shift_y, shift_x)))
+
+    def _update_spectrum(self, image, kx_iter, ky_iter):
+        """Handles the Fourier domain update."""
+        kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
+        kx_lidx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx), 0))
+        kx_hidx = round(kx_cidx + self.omega_obj_x / (2 * self.dkx)) + (1 if self.nx_lr % 2 != 0 else 0)
+        
+        ky_cidx = round((ky_iter - self.ky_min_n) / self.dky)
+        ky_lidx = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
+        ky_hidx = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
+        
+        pupil_func_patch = self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
+        image_FT = self.hr_fourier_image * pupil_func_patch
+        
+        #image_lr = fftshift(ifft2(ifftshift(image_FT)))
+        image_lr = ifft2(ifftshift(image_FT))
+    
+        image_lr_update = np.sqrt(image) * np.exp(1j * np.angle(image_lr))
+        image_FT_update = fftshift(fft2(image_lr_update)) #* ( 1/ (pupil_func_patch +1e-23))
+
+        weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
+        
+        # Update fourier spectrum
+        delta_lowres_ft = image_FT_update - image_FT
+        self.hr_fourier_image += delta_lowres_ft *  weight_fac_pupil
+
 
         if np.any(np.isnan(self.hr_fourier_image)):
             raise ValueError("There is a Nan value, check the configurations ")
