@@ -63,7 +63,10 @@ class EPRy:
 
         self.images = np.abs(np.array(self.images))
         
+    def _load_init_fs_image(self):
         
+        pass
+    
     def _load_pupil(self):
         
         dims = round((self.kx_max_n - self.kx_min_n)/self.dkx), round((self.ky_max_n - self.ky_min_n)/self.dky)
@@ -98,9 +101,15 @@ class EPRy:
     def _initiate_recons_images(self):
 
         
-        if self.hr_obj_image is None or self.hr_fourier_image is None:
+        if self.hr_obj_image is None and self.hr_fourier_image is None:
             self.hr_obj_image, self.hr_fourier_image = init_hr_image(self.bounds_x, self.bounds_y, self.dks)
         
+        elif self.hr_obj_image is not None:
+            self.hr_fourier_image = fftshift(fft2(self.hr_obj_image))
+            
+        elif self.hr_fourier_image is not None:
+            self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
+            
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
 
