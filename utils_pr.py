@@ -4,7 +4,10 @@ import torch
 from scipy.ndimage import zoom 
 from joblib import Parallel, delayed
 import time
+from time import strftime
 import functools
+import multiprocessing as mp
+from tqdm import tqdm 
 
 def time_it(func):
     """Decorator to measure execution time of a function."""
@@ -18,6 +21,28 @@ def time_it(func):
         return result  # Return original function result
     return wrapper
 
+
+def run_reconstruction(args):
+    
+    run_id, recon_class, iterations, fname, zoom_factor, kwargs = args
+    
+    recon = recon_class(**kwargs)
+    
+    recon.prepare(extend = 'double', zoom_factor=zoom_factor)
+    recon.iterate(iterations)
+    recon.save_reconsturction(f"{fname}_id{run_id}.h5")
+
+def reconstruction_repeats(recon_class, iterations, fname, repeats = 5,  n_jobs=4, zoom_factor=1, **kwargs):
+    time_str = strftime("%Y-%m-%d_%H.%M")
+    fname += f"_{time_str}"
+    
+    args_list = [(i, recon_class, iterations, fname, zoom_factor, kwargs) for i in range(repeats)]
+ 
+    with mp.Pool(processes=n_jobs) as pool:
+        list(tqdm(pool.imap_unordered(run_reconstruction, args_list), total=repeats, desc="Reconstructions"))
+    
+
+    
 def calc_obj_freq_bandwidth(lr_psize):
     """
     Calculate the Object bandwidth based on the step size in scanning mode.  

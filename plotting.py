@@ -3,6 +3,45 @@ import matplotlib.pyplot as plt
 from IPython.display import display, clear_output
 
 
+def load_reconstructed_data(h5_filepath, mode):
+    """
+    Load amplitude and phase data from an HDF5 file.
+    
+    Args:
+        h5_filepath (str): Path to the HDF5 file.
+        mode (str): The choice to show the object, fourier or pupil data
+            options: - object
+                     - fourier
+                     - pupil
+
+    """ 
+    mode = mode.capitalize()
+    
+    with h5py.File(h5_filepath, 'r') as fn:
+        # Load amplitude and phase datasets
+        try:
+            amplitude = np.array(fn[f'Reconstructed_Data/{mode}_amplitude'])
+            phase = np.array(fn[f'Reconstructed_Data/{mode}_phase'])
+        except:
+            mode = mode.lower()
+            amplitude = np.array(fn[f'Reconstructed_Data/{mode}_amplitude'])
+            phase = np.array(fn[f'Reconstructed_Data/{mode}_phase'])
+        
+    
+    fig, ax = plt.subplots(1,2, figsize=(8,8))
+    ax1 = ax[0].imshow(amplitude)
+    ax[0].set_title(f"{mode.capitalize()} Amplitude")
+    ax2 = ax[0].imshow(ogase)
+    ax[1].set_title(f"{mode.capitalize()} Phase")
+    
+    
+    plt.colorbar(ax1, ax=ax[0], fraction=0.046, pad=0.04)
+    plt.colorbar(ax2, ax=ax[1], fraction=0.046, pad=0.04)
+    plt.tight_layout()
+
+    jpeg_path = os.path.splitext(h5_filepath)[0] + '.jpeg'
+    plt.savefig(jpeg_path)
+
 def plot_roi_from_numpy(array, roi=None, title='Plot', vmin=None, vmax=None, save = False, cmap='viridis'):
 
     """

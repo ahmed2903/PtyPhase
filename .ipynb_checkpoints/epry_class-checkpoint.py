@@ -15,7 +15,10 @@ from scipy.ndimage import fourier_shift
 
 class EPRy:
     
-    def __init__(self, images, pupil_func: str, kout_vec, ks_pupil, lr_psize, alpha=0.1, beta=0.1, hr_obj_image=None, hr_fourier_image=None):
+    def __init__(self, images, pupil_func: str, kout_vec, ks_pupil, 
+                 lr_psize, alpha=0.1, beta=0.1, 
+                 hr_obj_image=None, hr_fourier_image=None,
+                 num_jobs=4):
         
         self.images = images
         self.num_images = self.images.shape[0]
@@ -33,12 +36,15 @@ class EPRy:
         self.losses = []
         self.iters_passed = 0
 
-        self.zoom_factor = None
+        self.zoom_factor = 1
+        self.num_jobs = num_jobs
 
     ############################# Prepare ################################
-
+    @time_it
     def prepare(self, **kwargs):
+        
         print("Preparing")
+        
         if 'zoom_factor' in kwargs:
             self.zoom_factor = kwargs['zoom_factor']
 
@@ -116,6 +122,7 @@ class EPRy:
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
 
     ################################## Main Loop ##################################
+    @time_it
     def iterate(self, iterations:int, live_plot=False):
 
         if live_plot:
@@ -124,9 +131,9 @@ class EPRy:
         for it in range(iterations):
             
             self.iter_loss = 0
-            for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]), 
-                                                               desc="Processing", total=len(self.images), unit="images")):
-
+            #for i, (image, kx_iter, ky_iter) in enumerate(tqdm(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]), 
+            #                                                   desc="Processing", total=len(self.images), unit="images")):
+            for i, (image, kx_iter, ky_iter) in enumerate(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1])):
                 
                 self._update_spectrum(image, kx_iter, ky_iter)
                 
@@ -356,9 +363,9 @@ class EPRy:
 
         with h5py.File(file_path, "w") as h5f:
             # Save metadata as attributes in the root group
-            recon_params = h5f.create_group("Recon Params")
+            recon_params = h5f.create_group("Recon_Params")
 
-            kdata = h5f.create_group("K-space Params")
+            kdata = h5f.create_group("K_space_Params")
             
             for key, value in metadata.items():
                 recon_params.attrs[key] = value  # Store each parameter as an attribute
@@ -367,12 +374,12 @@ class EPRy:
                 kdata.attrs[key] = value
 
 
-            recon_group = h5f.create_group("Reconstructed Data")
+            recon_group = h5f.create_group("Reconstructed_data")
             # Save reconstructed images 
             amp = np.abs(self.hr_obj_image)
             pha = np.angle(self.hr_obj_image)
-            recon_group.create_dataset("object_amplitude", data=amp, compression="gzip")
-            recon_group.create_dataset("object_phase", data=pha, compression="gzip")
+            recon_group.create_dataset("Object_amplitude", data=amp, compression="gzip")
+            recon_group.create_dataset("Object_phase", data=pha, compression="gzip")
             
             # Save spectrum 
             amp = np.abs(self.hr_fourier_image)
@@ -391,8 +398,16 @@ class EPRy:
             losses.create_dataset("main_loss_values", data=np.array(self.losses), compression="gzip")
         
 class EPRy_lr(EPRy):
-    
-    
+    def _prep_images(self):
+        
+        self.images = np.abs(np.array(self.images))
+
+        if self.zoom_factor > 1:
+            self.images = upsample_images(self.images, self.zoom_factor, n_jobs = self.num_jobs)
+            self.lr_psize = self.lr_psize / self.zoom_factor 
+            
+        self.images = np.array(self.images)
+        
     def _initiate_recons_images(self):
         if self.hr_obj_image is None and self.hr_fourier_image is None: 
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
@@ -443,7 +458,7 @@ class EPRy_lr(EPRy):
         self.iter_loss+=self._compute_loss(image_lr_new, image)
 
 class EPRy_fsc_lr(EPRy_lr):
-    
+    @time_it
     def iterate(self, iterations:int, start_fsc:int, live_plot=False):
 
         if live_plot:
@@ -510,13 +525,14 @@ class EPRy_upsample(EPRy_lr):
     
     def _prep_images(self):
         
-        self.lr_psize = self.lr_psize /2 
         try:
-            self.images = upsample_images(self.images, self.zoom_factor, n_jobs = 32)
+            self.images = upsample_images(self.images, self.zoom_factor, n_jobs = self.num_jobs)
+            self.lr_psize = self.lr_psize / self.zoom_factor 
 
         except: 
             print("Zoom factor not passed, default is 2.")
-            self.images = upsample_images(self.images, zoom_factor=2, n_jobs = 32)
+            self.lr_psize = self.lr_psize / 2 
+            self.images = upsample_images(self.images, zoom_factor=2, n_jobs = self.num_jobs)
         self.images = np.array(self.images)
 
     
@@ -525,6 +541,6 @@ class EPRy_pad(EPRy_lr):
 
     def _prep_images(self):
 
-        self.images = pad_to_double_parallel(self.images)
+        self.images = pad_to_double_parallel(self.images, n_jobs=self.num_jobs)
         self.images = np.array(self.images)
         
