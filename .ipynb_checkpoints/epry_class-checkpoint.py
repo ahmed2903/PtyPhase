@@ -6,11 +6,11 @@ from matplotlib.animation import FuncAnimation
 from IPython.display import display, clear_output
 from tqdm.notebook import tqdm
 import h5py
-
+import os
 from .utils_pr import *
 from .plotting import plot_images_side_by_side, update_live_plot, initialize_live_plot
 from scipy.ndimage import fourier_shift
-
+from PIL import Image
 #from ..data_fs import * #downsample_array, upsample_images, pad_to_double
 
 class EPRy:
@@ -123,11 +123,13 @@ class EPRy:
 
     ################################## Main Loop ##################################
     @time_it
-    def iterate(self, iterations:int, live_plot=False):
+    def iterate(self, iterations:int, live_plot=False, save_gif=False):
 
         if live_plot:
             fig, ax, img_amp, img_phase, fourier_amp, loss_im, axes = self._initialize_live_plot()
-        
+        if save_gif:
+  
+            frame_files = []
         for it in range(iterations):
             
             self.iter_loss = 0
@@ -146,10 +148,30 @@ class EPRy:
                 # Update the HR object image after all spectrum updates in this iteration
                 self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
                 self._update_live_plot(img_amp, img_phase, fourier_amp, loss_im, fig, it, axes)
+            if save_gif:
+                # Save the frame
+                frame_file = f"tmp/frame_{it}.png"
+                plt.savefig(frame_file)
+                frame_files.append(frame_file)
 
             self.losses.append(self.iter_loss/self.num_images)
             self.iters_passed += 1
-        
+
+        if save_gif:
+            # Create the GIF using Pillow
+            frames = [Image.open(file) for file in frame_files]
+            frames[0].save(
+                "recon_gif.gif",
+                save_all=True,
+                append_images=frames[4:],
+                duration=400,  # in milliseconds
+                loop=0
+            )
+            
+            # Cleanup temporary frame files
+            for file in frame_files:
+                os.remove(file)
+                
         self.hr_obj_image = ifft2(ifftshift(self.hr_fourier_image))
     
     def compute_weight_fac(self, func):
@@ -274,13 +296,13 @@ class EPRy:
             axes[1,1].set_yscale('log')
 
         amp_mean = np.mean(amplitude_obj)
-        vmin = max(amp_mean - 0.1 * amp_mean, 0)
-        vmax = amp_mean + 2 * amp_mean
+        vmin = max(amp_mean + 2 * amp_mean, 0)
+        vmax = amp_mean + 10 * amp_mean
         img_amp.set_clim(vmin, vmax)
     
         ft_mean = np.mean(amplitude_ft)
-        vmin = ft_mean - 0.1 * ft_mean
-        vmax = ft_mean + 2 * ft_mean
+        vmin = ft_mean + 2 * ft_mean
+        vmax = ft_mean + 10 * ft_mean
         fourier_amp.set_clim(vmin, vmax)
             
         clear_output(wait=True)
