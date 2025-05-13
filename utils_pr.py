@@ -69,8 +69,6 @@ def prepare_dims(images, pupil_kins, lr_psize, extend = None, band_multiplier = 
     # Object size == Scan length
     Lx, Ly = coh_img_dim[0] * lr_psize, coh_img_dim[1] * lr_psize
 
-    
-
     # High-resolution Fourier pixel size 
     dkx, dky = 2 * np.pi / Lx, 2 * np.pi / Ly
 
@@ -78,8 +76,6 @@ def prepare_dims(images, pupil_kins, lr_psize, extend = None, band_multiplier = 
     kx, ky = pupil_kins[:, 0], pupil_kins[:, 1]
     kx_min, kx_max = np.min(kx), np.max(kx)
     ky_min, ky_max = np.min(ky), np.max(ky)
-
-    
     
     if extend == 'double' :
         range_x = kx_max - kx_min

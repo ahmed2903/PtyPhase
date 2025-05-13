@@ -57,6 +57,7 @@ class EPRy:
         
         self.kout_vec = np.array(self.kout_vec)
         self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.ks_pupil, self.lr_psize, extend = extend)
+
         self.kx_min_n, self.kx_max_n = self.bounds_x
         self.ky_min_n, self.ky_max_n = self.bounds_y
         self.dkx, self.dky = self.dks
@@ -65,6 +66,7 @@ class EPRy:
         self.omega_obj_x, self.omega_obj_y = omegas
 
         self._load_pupil()
+        
         self._initiate_recons_images()
 
     def _prep_images(self):
@@ -79,6 +81,7 @@ class EPRy:
         
         dims = round((self.kx_max_n - self.kx_min_n)/self.dkx), round((self.ky_max_n - self.ky_min_n)/self.dky)
         dims = make_dims_even(dims)
+
         full_array = np.zeros(dims)
         
         if isinstance(self.pupil_func, str):
