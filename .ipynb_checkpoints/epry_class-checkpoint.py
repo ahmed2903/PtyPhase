@@ -20,7 +20,7 @@ class EPRy:
                  hr_obj_image=None, hr_fourier_image=None,
                  num_jobs=4):
         
-        self.images = images
+        self.images = images # Coherent images
         self.num_images = self.images.shape[0]
         
         self.pupil_func = pupil_func
