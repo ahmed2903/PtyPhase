@@ -350,7 +350,9 @@ class EPRy:
         plot_images_side_by_side(image1, image2, 
                                  vmin1= vmin1, vmax1=vmax1, 
                                  vmin2= vmin2, vmax2=vmax2, 
-                                 title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
+                                 title1=title1, title2=title2, 
+                                 cmap1=cmap1, cmap2=cmap2, 
+                                 figsize=(10, 5), show = True)
 
     def plot_losses(self):
 
@@ -393,7 +395,7 @@ class EPRy:
             kdata = h5f.create_group("K_space_Params")
             
             for key, value in metadata.items():
-                recon_params.attrs[key] = value  # Store each parameter as an attribute
+                recon_params.attrs[key] = value 
                 
             for key, value in kbounds.items():
                 kdata.attrs[key] = value
