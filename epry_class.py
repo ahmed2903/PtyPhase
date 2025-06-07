@@ -547,7 +547,6 @@ class EPRy_fsc_lr(EPRy_lr):
         # Apply shift to recenter spectrum (fractional pixel shift allowed)
         self.hr_fourier_image = fft2(fourier_shift(ifft2(F), shift=(shift_y, shift_x)))
 
-
 class EPRy_upsample(EPRy_lr):
     
     def _prep_images(self):
@@ -561,8 +560,6 @@ class EPRy_upsample(EPRy_lr):
             self.lr_psize = self.lr_psize / 2 
             self.images = upsample_images(self.images, zoom_factor=2, n_jobs = self.num_jobs)
         self.images = np.array(self.images)
-
-    
         
 class EPRy_pad(EPRy_lr):        
 
