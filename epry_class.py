@@ -49,14 +49,14 @@ class EPRy:
             self.zoom_factor = kwargs['zoom_factor']
 
         if 'extend' in kwargs:
-            extend = kwargs['extend']
+            self.extend = kwargs['extend']
         else:
-            extend = None
+            self.extend = None
             
         self._prep_images()
         
         self.kout_vec = np.array(self.kout_vec)
-        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.ks_pupil, self.lr_psize, extend = extend)
+        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.ks_pupil, self.lr_psize, extend = self.extend)
 
         self.kx_min_n, self.kx_max_n = self.bounds_x
         self.ky_min_n, self.ky_max_n = self.bounds_y
@@ -92,14 +92,19 @@ class EPRy:
             phase = np.zeros(dims)
         
         # Get the scaling factors for each dimension
-        scale_x = dims[0] / phase.shape[0] / 2
-        scale_y = dims[1] / phase.shape[1] / 2 
+        if self.extend == 'double':
+            factor = 2
+        elif self.extend == None:
+            factor = 1
+        
+        scale_x = dims[0] / phase.shape[0] / factor
+        scale_y = dims[1] / phase.shape[1] / factor
 
         # Scale the pupil phase array to match the required pupil dimensions
         scaled_pupil_phase = zoom(phase, (scale_x, scale_y))
-
+        
         # Calculate center indices
-        N, M = dims[0]//2, dims[1]//2
+        N, M = dims[0]//factor , dims[1]//factor
         
         start_x, start_y = (dims[0] - N) // 2, (dims[1] - M) // 2
         end_x, end_y = start_x + N, start_y + M

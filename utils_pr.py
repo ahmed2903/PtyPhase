@@ -87,7 +87,6 @@ def prepare_dims(images, pupil_kins, lr_psize, extend = None, band_multiplier = 
         ky_min = ky_min - range_y/2
         ky_max = ky_max + range_y/2
 
-    # FIX ME!!!
     elif extend == 'by_bandwidth':
         # Object bandwidth 
         omega_obj_x, omega_obj_y = calc_obj_freq_bandwidth(lr_psize)
