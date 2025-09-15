@@ -8,6 +8,7 @@ from time import strftime
 import functools
 import multiprocessing as mp
 from tqdm import tqdm 
+from .ZernikePolynomials import SquarePolynomials
 
 def time_it(func):
     """Decorator to measure execution time of a function."""
@@ -215,30 +216,28 @@ def downsample_array(arr, new_shape):
     
     return downsampled
 
-def pad_to_double(img):
-    """
-    Pads each 2D numpy array in a list to double its size.
-    The original image will be centered in the padded output.
+def pad_to_double(arr):
     
-    Args:
-        image_list: List of 2D numpy arrays
-        
-    Returns:
-        List of padded 2D numpy arrays, each with double the dimensions
-    """
+    m, n = arr.shape
+    out = np.zeros((2*m, 2*n), dtype=arr.dtype)
     
-    # Get original dimensions
-    h, w = img.shape
-    
-    # Calculate padding for each side
-    pad_h = h // 2
-    pad_w = w // 2
-    
-    # Pad the image with zeros
-    padded_img = np.pad(img, ((pad_h, pad_h), (pad_w, pad_w)), mode='constant', constant_values=0)
-    
-    return padded_img
+    start_m = m // 2
+    start_n = n // 2
+    out[start_m:start_m+m, start_n:start_n+n] = arr
 
+    return out
+
+def pad_to_double_torch(arr):
+    
+    m, n = arr.shape
+    out = torch.zeros((2*m, 2*n), dtype=arr.dtype, device = arr.device)
+    
+    start_m = m // 2
+    start_n = n // 2
+    out[start_m:start_m+m, start_n:start_n+n] = arr
+
+    return out
+    
 @time_it
 def pad_to_double_parallel(image_list, n_jobs=8):
     """
@@ -257,3 +256,23 @@ def pad_to_double_parallel(image_list, n_jobs=8):
     
     )
     return padded_images
+
+def get_zernike_wavefront(coefficients, pupil_shape):
+    
+    shape_y, shape_x = pupil_shape
+    square_poly = SquarePolynomials() 
+    
+    # Create coordinate grids
+    side_x = np.linspace(-1/np.sqrt(2), 1/np.sqrt(2), shape_x)
+    side_y = np.linspace(-1/np.sqrt(2), 1/np.sqrt(2), shape_y)
+
+    X, Y = np.meshgrid(side_x, side_y)
+    xdata = [X, Y]
+
+    all_results = square_poly.evaluate_all(xdata, coefficients)
+    new_wavefront = sum(all_results.values())
+    
+    return new_wavefront
+
+def unwrap_phase(phase):
+    return torch.atan2(torch.sin(phase), torch.cos(phase))

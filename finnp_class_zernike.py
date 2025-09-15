@@ -20,6 +20,7 @@ from .utils_pr import *
 from .plotting import plot_images_side_by_side, plot_roi_from_numpy
 from tqdm.notebook import tqdm, trange
 from scipy.ndimage import zoom 
+from .zernike_polynomials_torch import SquarePolynomialsTorch
 
 class ForwardModel(nn.Module):
     """
@@ -35,7 +36,7 @@ class ForwardModel(nn.Module):
         ctf (torch.Tensor): Contrast transfer function (CTF) mask.
         down_sample (torch.nn.AvgPool2d): Downsampling operation for generating low-resolution images.
     """
-    def __init__(self, spectrum_size, pupil_size, band_multiplier, device):
+    def __init__(self, spectrum_size, pupil_size, band_multiplier, device, n_zernike = 29):
         """
         Initializes the ForwardModel with given parameters.
 
@@ -47,23 +48,44 @@ class ForwardModel(nn.Module):
         """
         super(ForwardModel, self).__init__()
         
+        self.device = device
+        print(f"device used: {self.device}")
         self.spectrum_size = spectrum_size
         self.pupil_size = pupil_size
         self.band_multiplier = band_multiplier
-
+        self.n_zernike = n_zernike
+        
         # Initial guess: upsampled low-resolution image spectrum
-        self.spectrum_amp = nn.Parameter(torch.normal(1,1,(spectrum_size[0]*self.band_multiplier, spectrum_size[1]*self.band_multiplier), dtype=torch.float64))
-        self.spectrum_pha = nn.Parameter(torch.zeros(spectrum_size[0]*self.band_multiplier, spectrum_size[1]*self.band_multiplier, dtype=torch.float64))
+        self.spectrum_amp = nn.Parameter(torch.ones(spectrum_size[0]*self.band_multiplier, spectrum_size[1]*self.band_multiplier, dtype=torch.float64, device = device))
+        
+        self.spectrum_pha = nn.Parameter(torch.zeros(spectrum_size[0]*self.band_multiplier, spectrum_size[1]*self.band_multiplier, dtype=torch.float64, device = device))
         
 
-        self.pupil_amp = nn.Parameter(torch.ones(pupil_size[0], pupil_size[1], dtype=torch.float64))
-        self.pupil_pha = nn.Parameter(torch.zeros(pupil_size[0], pupil_size[1], dtype=torch.float64))
+        self.pupil_amp = nn.Parameter(torch.ones(pupil_size[0], pupil_size[1], dtype=torch.float64, device = device))
+        # Zernike coefficients
+        #self.zernike_coeffs = nn.Parameter(torch.zeros(n_zernike, dtype=torch.float64))
+        self.zernike_coeffs = nn.Parameter(2 * torch.rand(n_zernike, dtype=torch.float64) - 1)
         
         self.ctf = mask_torch_ctf(pupil_size, device = device) 
         
         self.down_sample = nn.AvgPool2d(kernel_size=self.band_multiplier) 
         
 
+        # Assuming the pupil array is extended to double
+        pupil_size = (self.pupil_size[0]//2, self.pupil_size[1]//2)
+        
+        self.poly = SquarePolynomialsTorch(pupil_size, device="cuda")
+        self.update_objFT_pupil()
+        
+    def update_objFT_pupil(self):
+        """Recompute pupil function from coefficients"""
+        
+        self.pupil_pha = unwrap_phase(pad_to_double_torch(self.poly.evaluate_all(self.zernike_coeffs)))
+                                             
+        self.pupil = (self.pupil_amp) * torch.exp(1j *  self.pupil_pha)
+        
+        self.spectrum = self.spectrum_amp * torch.exp(1j * self.spectrum_pha)
+        
     def forward(self, bounds):
         """
         Simulates the forward propagation to generate a low-resolution image.
@@ -75,20 +97,14 @@ class ForwardModel(nn.Module):
             torch.Tensor: The simulated low-resolution image as a complex tensor.
         """
         # Create complex spectrum and pupil
-        spectrum = self.spectrum_amp * torch.exp(1j * self.spectrum_pha)
-        
-        pupil = (self.pupil_amp * self.ctf) * torch.exp(1j * self.pupil_pha * self.ctf)       
-        
+                
         sx,ex,sy,ey = bounds[0][0], bounds[0][1], bounds[1][0], bounds[1][1]
 
-        pupil_patch = pupil.index_select(0, torch.arange(sx, ex, device=pupil.device))
-        pupil_patch = pupil_patch.index_select(1, torch.arange(sy, ey, device=pupil.device))
+        pupil_patch = self.pupil[sx:ex,sy:ey]
 
-        # Apply pupil function 
-        forward_spectrum = spectrum * pupil_patch
 
         # Inverse Fourier Transform to simulate low-resolution image
-        low_res_image = ifft2(ifftshift(forward_spectrum))
+        low_res_image = torch.fft.ifft2(torch.fft.ifftshift(self.spectrum * pupil_patch))
 
         low_res_amp = torch.abs(low_res_image)
         low_res_pha = torch.angle(low_res_image)
@@ -157,7 +173,7 @@ class FINN:
 
         Args:
             model (torch.nn.Module): The neural network model for reconstruction.
-            double_pupil (str, optional): Mode of pupil extension. "by_bandwidth", "double", None. Default is None
+            extend (str, optional): Mode of pupil extension. "by_bandwidth", "double", None. Default is None
             device (str, optional): The computation device ('cpu' or 'cuda'). Default is 'cpu'.
         """
         self.set_device(device=device)
@@ -272,6 +288,15 @@ class FINN:
 
         self.model.pupil_pha = nn.Parameter(full_tensor)
 
+    def load_zernike_coeff(self, coeffs):
+
+        coeffs = torch.as_tensor(coeffs, dtype=torch.float64, device=self.device)
+        
+        with torch.no_grad():
+            self.model.zernike_coeffs.data.copy_(coeffs)
+
+        self.model.update_objFT_pupil()
+        
     def set_device(self, device='cpu'):
         """
         Configures the computation device for the model.
@@ -359,8 +384,7 @@ class FINN:
         if not "lr" in optimiser_args:
             raise ValueError("Learning rate must be passed")
         
-        self.spectrum_optimiser = optimiser([self.model.spectrum_amp, self.model.spectrum_pha, 
-                                             self.model.pupil_amp, self.model.pupil_pha], 
+        self.spectrum_optimiser = optimiser([self.model.spectrum_amp, self.model.spectrum_pha], 
                                             **optimiser_args)
         
     def set_pupil_optimiser(self, optimiser, freeze_pupil_amp = False, **kwargs):
@@ -384,11 +408,11 @@ class FINN:
             raise ValueError("Learning rate must be passed")
 
         if freeze_pupil_amp:
-            self.pupil_optimiser = optimiser([self.model.pupil_pha], **optimiser_args)
+            self.pupil_optimiser = optimiser([self.model.zernike_coeffs], **optimiser_args)
         else:
-            self.pupil_optimiser = optimiser([self.model.pupil_amp, self.model.pupil_pha], **optimiser_args)
+            self.pupil_optimiser = optimiser([self.model.pupil_amp, self.model.zernike_coeffs], **optimiser_args)
 
-        self.spectrum_optimiser.param_groups[0]['params'] = [self.model.spectrum_amp, self.model.spectrum_pha]
+        #self.spectrum_optimiser.param_groups[0]['params'] = [self.model.spectrum_amp, self.model.spectrum_pha]
         
     ######################################################################################################
     ################################## Losses and Regs ###################################################
@@ -477,8 +501,8 @@ class FINN:
             
             current_optimizer.zero_grad()
             self.epoch_loss = 0
-
-            for i, (image, kx_iter, ky_iter) in enumerate(zip(self.images, self.kin_vec[:, 0], self.kin_vec[:, 1])):   
+            self.model.update_objFT_pupil()
+            for i, (image, kx_iter, ky_iter) in tqdm(enumerate(zip(self.images, self.kin_vec[:, 0], self.kin_vec[:, 1])), total = self.images.shape[0], desc = f'iteration {epoch}'):   
                  
                 # Forward Pass
                 self._process_image(image, kx_iter, ky_iter)
@@ -531,7 +555,7 @@ class FINN:
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
+        self.recon_obj_tensor = torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
@@ -558,14 +582,11 @@ class FINN:
         
         bounds = [[kx_lidx, kx_hidx], [ky_lidx, ky_hidx]]
         low_resolution_image = self.model(bounds)
-        self._get_current_object_image()
+        #self._get_current_object_image()
 
-        if self.amplitude_based:
-            # Amplitude Based
-            loss = self.loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
-        else:
-            # Intensity Based
-            loss = self.loss_fn(torch.abs(low_resolution_image)**2, torch.abs(image))
+        
+        # Intensity Based
+        loss = self.loss_fn(torch.abs(low_resolution_image)**2, torch.abs(image))
         
         self.epoch_loss += self.beta * loss 
 
@@ -575,9 +596,7 @@ class FINN:
 
         if torch.isnan(loss):
             raise ValueError("There is a Nan value, check the configurations ")
-            
-        
-            
+                        
     def post_process(self):
         """
         Performs post-processing to extract and compute the final results after training.
@@ -585,7 +604,6 @@ class FINN:
         This method detaches the computed spectra and pupil functions from the computation graph, 
         reconstructs the spectrum, object, and pupil functions, and calculates the corresponding 
         contrast transfer function (CTF).
-
         """
         spectrum_amp = self.model.spectrum_amp.detach()  # Detach from computation graph
         spectrum_pha = self.model.spectrum_pha.detach()
@@ -918,7 +936,7 @@ class FINN_alphatv(FINN):
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
+        self.recon_obj_tensor = torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
@@ -945,7 +963,7 @@ class FINN_alphatv(FINN):
         
         bounds = [[kx_lidx, kx_hidx], [ky_lidx, ky_hidx]]
         low_resolution_image = self.model(bounds)
-        self._get_current_object_image()
+        #self._get_current_object_image()
         
         tv_reg = self.tv_regularization(self.recon_obj_tensor)
 
@@ -1267,7 +1285,7 @@ class FINN_support(FINN):
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
+        self.recon_obj_tensor = torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
@@ -1716,7 +1734,7 @@ class FINN_mgd(FINN):
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
+        self.recon_obj_tensor = torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
@@ -2078,7 +2096,7 @@ class FINN_adamgd(FINN):
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
+        self.recon_obj_tensor = torch.fft.ifft2(torch.fft.ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
