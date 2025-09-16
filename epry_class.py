@@ -473,6 +473,7 @@ class EPRy_lr(EPRy):
         image_FT_update = fftshift(fft2(image_lr_update)) 
 
         weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
+        weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image)
         
         # Update fourier spectrum
         delta_lowres_ft = image_FT_update - image_FT
@@ -482,7 +483,6 @@ class EPRy_lr(EPRy):
             raise ValueError("There is a Nan value, check the configurations ")
             
         # Update Pupil Function 
-        weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image)
         self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += weight_factor_obj * delta_lowres_ft
 
         image_lr_new = np.abs(ifft2(ifftshift(self.hr_fourier_image*self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx])))**2
