@@ -87,7 +87,41 @@ def prepare_dims(images, pupil_kins, lr_psize, extend = None, band_multiplier = 
         
         ky_min = ky_min - range_y/2
         ky_max = ky_max + range_y/2
+    elif extend == 'triple':
+        range_x = kx_max - kx_min
+        range_y = ky_max - ky_min
 
+        kx_min -= 1 * range_x
+        kx_max += 1 * range_x
+        ky_min -= 1 * range_y
+        ky_max += 1 * range_y
+    elif extend == 'quadruple':
+        range_x = kx_max - kx_min
+        range_y = ky_max - ky_min
+
+        kx_min -= 1.5 * range_x
+        kx_max += 1.5 * range_x
+        ky_min -= 1.5 * range_y
+        ky_max += 1.5 * range_y
+        
+    elif extend == 'quintiple':
+        range_x = kx_max - kx_min
+        range_y = ky_max - ky_min
+
+        kx_min -= 2 * range_x
+        kx_max += 2 * range_x
+        ky_min -= 2 * range_y
+        ky_max += 2 * range_y
+
+    elif extend == 'sixtuple':
+        range_x = kx_max - kx_min
+        range_y = ky_max - ky_min
+
+        kx_min -= 2.5 * range_x
+        kx_max += 2.5 * range_x
+        ky_min -= 2.5 * range_y
+        ky_max += 2.5 * range_y
+        
     elif extend == 'by_bandwidth':
         # Object bandwidth 
         omega_obj_x, omega_obj_y = calc_obj_freq_bandwidth(lr_psize)
@@ -257,6 +291,45 @@ def pad_to_double_parallel(image_list, n_jobs=8):
     )
     return padded_images
 
+
+def pad_to_shape(image_lr, shape):
+
+    ny, nx = shape
+    h, w = image_lr.shape
+    
+    if h > ny or w > nx:
+        raise ValueError("Low-res image is larger than pupil size. Cannot pad.")
+    
+    # Create zeros
+    padded = np.zeros((ny, nx), dtype=image_lr.dtype)
+    
+    # Compute start indices to center image
+    start_y = (ny - h) // 2
+    start_x = (nx - w) // 2
+    
+    # Place low-res image into padded array
+    padded[start_y:start_y+h, start_x:start_x+w] = image_lr
+    
+    return padded
+
+def pad_to_shape_parallel(image_list, shape, n_jobs=8):
+    """
+    Slices the center of each 2D numpy array in a list,
+    keeping only half the size in each dimension.
+    
+    Args:
+        image_list: List of 2D numpy arrays
+        
+    Returns:
+        List of center-sliced 2D numpy arrays, each with half the dimensions
+    """
+    # Use joblib to parallelize the median filter application
+    padded_images = Parallel(n_jobs=n_jobs, backend = 'threading')(
+        delayed(pad_to_shape)(image, shape) for image in image_list
+    
+    )
+    return padded_images
+    
 def get_zernike_wavefront(coefficients, pupil_shape):
     
     shape_y, shape_x = pupil_shape
