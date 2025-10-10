@@ -12,43 +12,10 @@ from .plotting import plot_images_side_by_side, update_live_plot, initialize_liv
 from scipy.ndimage import fourier_shift
 from PIL import Image
 #from ..data_fs import * #downsample_array, upsample_images, pad_to_double
+from .phase_abstract import Plot, LivePlot, PhaseRetrievalBase
 
-
-def pad_to_double(img):
-    h, w = img.shape
     
-    # Calculate padding for each side
-    pad_h = h // 2
-    pad_w = w // 2
-    
-    # Pad the image with zeros
-    padded_img = np.pad(img, ((pad_h, pad_h), (pad_w, pad_w)), mode='constant', constant_values=0)
-    
-    return padded_img
-
-def crop_to_half(img):
-    
-    h, w = img.shape
-    
-    # Target dimensions (half of the current size)
-    new_h, new_w = h // 2, w // 2
-    
-    # Calculate start indices for cropping
-    start_h = (h - new_h) // 2
-    start_w = (w - new_w) // 2
-    
-    # Crop symmetrically around the center
-    cropped_img = img[start_h:start_h+new_h, start_w:start_w+new_w]
-    
-    return cropped_img
-    
-def forward_fft(arr):
-    return np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(arr)))
-
-def inverse_fft(arr):
-    return np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(arr)))
-
-class EPRy:
+class EPRy(PhaseRetrievalBase, Plot, LivePlot):
     
     def __init__(self, images, pupil_func: str, kout_vec, ks_pupil, 
                  lr_psize, alpha=0.1, beta=0.1, 
@@ -169,10 +136,10 @@ class EPRy:
             self.hr_obj_image, self.hr_fourier_image = init_hr_image(self.bounds_x, self.bounds_y, self.dks)
         
         elif self.hr_obj_image is not None:
-            self.hr_fourier_image = forward_fft(self.hr_obj_image) #fftshift(fft2(self.hr_obj_image))
+            self.hr_fourier_image = self.forward_fft(self.hr_obj_image) #fftshift(fft2(self.hr_obj_image))
             
         elif self.hr_fourier_image is not None:
-            self.hr_obj_image = inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
+            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
 
         # FIX HR OBJECT 
         
@@ -184,7 +151,9 @@ class EPRy:
     def iterate(self, iterations:int, live_plot=False, save_gif=False):
 
         if live_plot:
-            fig, ax, img_amp, img_phase, fourier_amp, loss_im, axes = self._initialize_live_plot()
+            fig, axes, img_amp, img_phase, fourier_amp, pupil_phase,loss_im = self._initialize_live_plot()
+            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
+            self._update_live_plot(fig, axes, img_amp, img_phase, fourier_amp, pupil_phase,loss_im)
         if save_gif:
   
             frame_files = []
@@ -205,7 +174,7 @@ class EPRy:
                 
             if live_plot:
                 # Update the HR object image after all spectrum updates in this iteration
-                self.hr_obj_image = inverse_fft(self.hr_fourier_image) #ifft2(ifftshift(self.hr_fourier_image))
+                self.hr_obj_image = self.inverse_fft(self.hr_fourier_image) #ifft2(ifftshift(self.hr_fourier_image))
                 self._update_live_plot(img_amp, img_phase, fourier_amp, loss_im, fig, it, axes)
             if save_gif:
                 # Save the frame
@@ -231,17 +200,13 @@ class EPRy:
             for file in frame_files:
                 os.remove(file)
                 
-        self.hr_obj_image = inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
+        self.hr_obj_image = self.inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
     
     def compute_weight_fac(self, func):
         """Compute weighting factor for phase retrieval update."""
         
         mod = np.abs(func) ** 2
         return np.conjugate(func) / (mod.max() + 1e-23)
-
-    def _compute_loss(self, pred, target):
-        
-        return np.sqrt(np.sum(np.abs(pred - target) ** 2)) 
     
     def _update_spectrum(self, image, kx_iter, ky_iter):
         
@@ -258,11 +223,11 @@ class EPRy:
         image_FT = self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx] * self.pupil_func
         #image_FT *= (self.nx_lr/self.nx_hr)**2
         
-        image_lr = inverse_fft(image_FT) #(ifftshift(image_FT))
+        image_lr = self.inverse_fft(image_FT) #(ifftshift(image_FT))
         image_lr_update = np.sqrt(image) * np.exp(1j * np.angle(image_lr))
         #image_lr_update *= (self.nx_hr/self.nx_lr)**2
         #inv_pupil_func = 1/ (pupil_func_patch +1e-8)
-        image_FT_update = forward_fft(image_lr_update) #(fft2(image_lr_update)) #* inv_pupil_func
+        image_FT_update = self.forward_fft(image_lr_update) #(fft2(image_lr_update)) #* inv_pupil_func
         
         
         # Compute update weight factor
@@ -285,201 +250,11 @@ class EPRy:
         # Update Pupil Function 
         self.pupil_func += weight_factor_obj * delta_lowres_ft
 
-        image_lr_new = np.abs(inverse_fft(self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx]*self.pupil_func))**2
+        image_lr_new = np.abs(self.inverse_fft(self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx]*self.pupil_func))**2
         
         self.iter_loss+=self._compute_loss(image_lr_new, image)
         
-    ################################# Plotting ###############################
-
-    def _initialize_live_plot(self):
-        """
-        Initializes the live plot with two subplots: one for amplitude and one for phase.
-        
-        Returns:
-            fig, ax: Matplotlib figure and axes.
-            img_amp, img_phase: Image objects for real-time updates.
-        """
     
-        # Initialize empty images
-        fig, axes = plt.subplots(2, 2, figsize=(8, 8))
-                
-        # Initialize the plots with the initial image
-        img_amp = axes[0,0].imshow(np.abs(self.hr_obj_image), cmap='viridis') #, vmin =.2, vmax = 1, cmap='viridis')
-        axes[0,0].set_title("Object Amplitude")
-        cbar_amp = plt.colorbar(img_amp, ax=axes[0,0])
-
-        img_phase = axes[0,1].imshow(np.angle(self.hr_obj_image), cmap='viridis')
-        axes[0,1].set_title("Object Phase")
-        img_phase.set_clim(-np.pi, np.pi)
-        cbar_phase = plt.colorbar(img_phase, ax=axes[0,1])
-        
-        
-        fourier_amp = axes[1,0].imshow(np.abs(self.hr_fourier_image), cmap='viridis')
-        axes[1,0].set_title("Fourier Amplitude")
-        cbar_fourier = plt.colorbar(fourier_amp, ax=axes[1,0])
-        
-        loss_im, = axes[1,1].plot([],[])
-        axes[1,1].set_xlabel("iteration")
-        axes[1,1].set_ylabel("loss")
-
-        plt.tight_layout()
-        plt.ion()  # Enable interactive mode
-        plt.show()
-    
-        return fig, axes, img_amp, img_phase, fourier_amp, loss_im, axes
-    
-    def _update_live_plot(self, img_amp, img_phase, fourier_amp, loss_im, fig, it, axes):
-        """
-        Updates the live plot with new amplitude and phase images.
-    
-        Args:
-            img_amp: Matplotlib image object for amplitude.
-            img_phase: Matplotlib image object for phase.
-            hr_obj_image: The complex object image to be plotted.
-        """
-        amplitude_obj = np.abs(self.hr_obj_image)
-        phase_obj = np.angle(self.hr_obj_image)
-        amplitude_ft = np.abs(self.hr_fourier_image)
-        
-        img_amp.set_data(amplitude_obj)  # Normalize for visibility
-        img_phase.set_data(phase_obj)
-        fourier_amp.set_data(amplitude_ft)
-        
-        loss_im.set_xdata(range(self.iters_passed))
-        loss_im.set_ydata(self.losses)
-
-        axes[1,1].set_title(f"Iteration: {it}, loss: {self.iter_loss/self.num_images:.2f}", fontsize=12)
-        axes[1,1].relim()
-        axes[1,1].autoscale_view()
-        if it>1:
-            axes[1,1].set_yscale('log')
-
-        amp_mean = np.mean(amplitude_obj)
-        vmin = max(amp_mean + 2 * amp_mean, 0)
-        vmax = amp_mean + 5 * amp_mean
-        img_amp.set_clim(vmin, vmax)
-    
-        ft_mean = np.mean(amplitude_ft)
-        vmin = ft_mean + 2 * ft_mean
-        vmax = ft_mean + 5 * ft_mean
-        fourier_amp.set_clim(vmin, vmax)
-            
-        clear_output(wait=True)
-        display(fig)
-        fig.canvas.flush_events()
-    
-    def plot_rec_obj(self, 
-                     vmin1= None, vmax1=None, 
-                     vmin2= -np.pi, vmax2=np.pi, 
-                     title1 = "Object Amplitude", title2 = "Object Phase", cmap1 = "viridis", cmap2 = "viridis"):
-        
-        image1 = np.abs(self.hr_obj_image)
-        image2 = np.angle(self.hr_obj_image)
-    
-        plot_images_side_by_side(image1, image2, 
-                                 vmin1= vmin1, vmax1=vmax1, 
-                                 vmin2= vmin2, vmax2=vmax2, 
-                                 title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
-    
-    def plot_rec_fourier(self, 
-                         vmin1= None, vmax1=None, 
-                     vmin2= -np.pi, vmax2=np.pi, 
-                         title1 = "Fourier Amplitude", title2 = "Fourier Phase", cmap1 = "viridis", cmap2 = "viridis"):
-        
-        image1 = np.abs(self.hr_fourier_image)
-        image2 = np.angle(self.hr_fourier_image)
-    
-        plot_images_side_by_side(image1, image2, 
-                                 vmin1= vmin1, vmax1=vmax1, 
-                                 vmin2= vmin2, vmax2=vmax2, 
-                                 title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
-    
-    
-    def plot_pupil_func(self, 
-                        vmin1= None, vmax1=None, 
-                        vmin2= -np.pi, vmax2=np.pi, 
-                        title1 = "Pupil Amplitude", title2 = "Pupil Phase", cmap1 = "viridis", cmap2 = "viridis"):
-        
-        image1 = np.abs(self.pupil_func)
-        image2 = np.angle(self.pupil_func)
-    
-        plot_images_side_by_side(image1, image2, 
-                                 vmin1= vmin1, vmax1=vmax1, 
-                                 vmin2= vmin2, vmax2=vmax2, 
-                                 title1=title1, title2=title2, 
-                                 cmap1=cmap1, cmap2=cmap2, 
-                                 figsize=(10, 5), show = True)
-
-    def plot_losses(self):
-
-        plt.figure()
-        plt.plot(self.losses)
-        plt.xlabel("Iteration")
-        plt.ylabel("Error")
-        plt.title("Error Graph")
-
-
-    def save_reconsturction(self, file_path):
-        """
-        Save the reconstruction data and metadata to an HDF5 file.
-    
-        Args:
-            file_path (str): The path where the HDF5 file will be saved.
-        """
-        # Prepare metadata
-        metadata = {
-            
-        "Num_iters": self.iters_passed,
-        "upsample_factor": self.zoom_factor,
-        "pupil_dims" : self.pupil_func.shape,
-        "coherent_image_dims": self.images[0].shape,
-        }
-
-        kbounds = {
-        "bounds_kx": str(self.bounds_x),
-        "bounds_ky": str(self.bounds_y),
-        "dks": str(self.dks),
-        "obj_bandwidth_x": str(self.omega_obj_x),
-        "obj_bandwidth_y": str(self.omega_obj_y)
-        }
-
-
-        with h5py.File(file_path, "w") as h5f:
-            # Save metadata as attributes in the root group
-            recon_params = h5f.create_group("Recon_Params")
-
-            kdata = h5f.create_group("K_space_Params")
-            
-            for key, value in metadata.items():
-                recon_params.attrs[key] = value 
-                
-            for key, value in kbounds.items():
-                kdata.attrs[key] = value
-
-
-            recon_group = h5f.create_group("Reconstructed_data")
-            # Save reconstructed images 
-            amp = np.abs(self.hr_obj_image)
-            pha = np.angle(self.hr_obj_image)
-            recon_group.create_dataset("Object_amplitude", data=amp, compression="gzip")
-            recon_group.create_dataset("Object_phase", data=pha, compression="gzip")
-            
-            # Save spectrum 
-            amp = np.abs(self.hr_fourier_image)
-            pha = np.angle(self.hr_fourier_image)
-            recon_group.create_dataset("Fourier_amplitude", data=amp, compression="gzip")
-            recon_group.create_dataset("Fourier_phase", data=pha, compression="gzip")
-            
-            # Save reconstructed pupil function
-            amp = np.abs(self.pupil_func)
-            pha = np.angle(self.pupil_func)
-            recon_group.create_dataset("Pupil_amplitude", data=amp, compression="gzip")
-            recon_group.create_dataset("Pupil_phase", data=pha, compression="gzip")
-    
-            # Save loss values
-            losses = h5f.create_group("Losses")
-            losses.create_dataset("main_loss_values", data=np.array(self.losses), compression="gzip")
-        
 class EPRy_lr(EPRy):
     def _prep_images(self):
         
@@ -497,10 +272,10 @@ class EPRy_lr(EPRy):
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
         
         elif self.hr_obj_image is not None:
-            self.hr_fourier_image = forward_fft(self.hr_obj_image) #(fft2(self.hr_obj_image))
+            self.hr_fourier_image = self.forward_fft(self.hr_obj_image) #(fft2(self.hr_obj_image))
             
         elif self.hr_fourier_image is not None:
-            self.hr_obj_image = inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
+            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
             
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
@@ -523,12 +298,12 @@ class EPRy_lr(EPRy):
         image_FT = self.hr_fourier_image * pupil_func_patch #* ctf_patch
         
         #image_lr = fftshift(ifft2(ifftshift(image_FT)))
-        image_lr = inverse_fft(image_FT) #ifft2(ifftshift(image_FT))
+        image_lr = self.inverse_fft(image_FT) #ifft2(ifftshift(image_FT))
 
         
         image_lr_update = np.sqrt(image) * np.exp(1j *np.angle(image_lr))
         
-        image_FT_update = forward_fft(image_lr_update) #* ctf_patch #(fft2(image_lr_update)) 
+        image_FT_update = self.forward_fft(image_lr_update) #* ctf_patch #(fft2(image_lr_update)) 
 
         
         weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
@@ -546,7 +321,7 @@ class EPRy_lr(EPRy):
 
         new_exit = self.hr_fourier_image*self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
 
-        image_lr_new = np.abs(inverse_fft(new_exit))**2
+        image_lr_new = np.abs(self.inverse_fft(new_exit))**2
                 
         self.iter_loss += self._compute_loss(image_lr_new, image)
 
@@ -581,10 +356,6 @@ class EPRy_high(EPRy):
         self._prep_images()
         self._initiate_recons_images()
 
-        # self.ctf = np.ones_like(self.pupil_func)
-        # self.ctf = crop_to_half(self.ctf)
-        # self.ctf = pad_to_shape(self.ctf, self.pupil_func.shape).astype(complex)     
-    
     def _prep_images(self):
         
         self.images = np.abs(np.array(self.images))
@@ -605,10 +376,10 @@ class EPRy_high(EPRy):
             self.hr_obj_image, self.hr_fourier_image = init_hr_image(self.bounds_x, self.bounds_y, self.dks)
         
         elif self.hr_obj_image is not None:
-            self.hr_fourier_image = forward_fft(self.hr_obj_image) #fftshift(fft2(self.hr_obj_image))
+            self.hr_fourier_image = self.forward_fft(self.hr_obj_image) #fftshift(fft2(self.hr_obj_image))
             
         elif self.hr_fourier_image is not None:
-            self.hr_obj_image = inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
+            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
 
         
         self.nx_lr, self.ny_lr = self.images[0].shape
@@ -641,12 +412,12 @@ class EPRy_high(EPRy):
         image_FT = self.hr_fourier_image * self.pupil_func * self.ctf
 
         
-        image_lr = inverse_fft(image_FT) #ifft2(ifftshift(image_FT))
+        image_lr = self.inverse_fft(image_FT) #ifft2(ifftshift(image_FT))
         #image = pad_to_pupil(image, self.pupil_func.shape)
         
         image_lr_update = np.sqrt(image) * np.exp(1j * np.angle(image_lr))
         
-        image_FT_update = forward_fft(image_lr_update) #(fft2(image_lr_update)) 
+        image_FT_update = self.forward_fft(image_lr_update) #(fft2(image_lr_update)) 
 
         
         weight_fac_pupil = self.alpha * self.compute_weight_fac(self.pupil_func)
@@ -665,7 +436,7 @@ class EPRy_high(EPRy):
         new_exit = self.hr_fourier_image*self.pupil_func * self.ctf #[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
 
         # Test 
-        image_lr_new = np.abs(inverse_fft(new_exit))
+        image_lr_new = np.abs(self.inverse_fft(new_exit))
         
         #image_lr_new = np.abs(ifft2(ifftshift(self.hr_fourier_image*self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx])))**2
         
@@ -699,13 +470,13 @@ class EPRy_fsc_lr(EPRy_lr):
                 
             if live_plot:
                 # Update the HR object image after all spectrum updates in this iteration
-                self.hr_obj_image = inverse_fft(self.hr_fourier_image) #ifft2(ifftshift(self.hr_fourier_image))
+                self.hr_obj_image = self.inverse_fft(self.hr_fourier_image) #ifft2(ifftshift(self.hr_fourier_image))
                 self._update_live_plot(img_amp, img_phase, fourier_amp, loss_im, fig, it, axes)
 
             self.losses.append(self.iter_loss/self.num_images)
             self.iters_passed += 1
             
-        self.hr_obj_image = inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
+        self.hr_obj_image = self.inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
         
 
     def _center_fourier_spectrum(self):
@@ -733,7 +504,7 @@ class EPRy_fsc_lr(EPRy_lr):
 
         print(shift_y, shift_x)
         # Apply shift to recenter spectrum (fractional pixel shift allowed)
-        self.hr_fourier_image = forward_fft(fourier_shift(inverse_fft(F), shift=(shift_y, shift_x))) #fft2(fourier_shift(ifft2(F), shift=(shift_y, shift_x)))
+        self.hr_fourier_image = self.forward_fft(fourier_shift(self.inverse_fft(F), shift=(shift_y, shift_x))) #fft2(fourier_shift(ifft2(F), shift=(shift_y, shift_x)))
 
 class EPRy_upsample(EPRy_lr):
     
