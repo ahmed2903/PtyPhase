@@ -21,6 +21,14 @@ from .plotting import plot_images_side_by_side, plot_roi_from_numpy
 from tqdm.notebook import tqdm, trange
 from scipy.ndimage import zoom 
 
+
+def forward_fft(arr):
+    return torch.fft.fftshift(torch.fft.fft2(torch.fft.ifftshift(arr)))
+
+def inverse_fft(arr):
+    return torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(arr)))
+
+    
 class ForwardModel(nn.Module):
     """
     A neural network-based forward model for simulating the low-resolution images 
@@ -88,7 +96,7 @@ class ForwardModel(nn.Module):
         forward_spectrum = spectrum * pupil_patch
 
         # Inverse Fourier Transform to simulate low-resolution image
-        low_res_image = ifft2(ifftshift(forward_spectrum))
+        low_res_image = inverse_fft(forward_spectrum) #ifft2(ifftshift(forward_spectrum))
 
         low_res_amp = torch.abs(low_res_image)
         low_res_pha = torch.angle(low_res_image)
@@ -531,7 +539,7 @@ class FINN:
         spectrum_pha = self.model.spectrum_pha
         
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
-        self.recon_obj_tensor = ifft2(ifftshift(self.recon_spectrum))
+        self.recon_obj_tensor = inverse_fft(self.recon_spectrum) #ifft2(ifftshift(self.recon_spectrum))
     
     def _process_image(self, image, kx_iter, ky_iter):        
         """
@@ -560,12 +568,13 @@ class FINN:
         low_resolution_image = self.model(bounds)
         self._get_current_object_image()
 
-        if self.amplitude_based:
-            # Amplitude Based
-            loss = self.loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
-        else:
-            # Intensity Based
-            loss = self.loss_fn(torch.abs(low_resolution_image)**2, torch.abs(image))
+        # if self.amplitude_based:
+        #     # Amplitude Based
+        #     loss = self.loss_fn(torch.abs(low_resolution_image), torch.sqrt(torch.abs(image)))
+        # else:
+        #     # Intensity Based
+        
+        loss = self.loss_fn(torch.abs(low_resolution_image)**2, torch.abs(image))
         
         self.epoch_loss += self.beta * loss 
 
@@ -593,7 +602,7 @@ class FINN:
         self.recon_spectrum = spectrum_amp * torch.exp(1j * spectrum_pha)
         self.recon_spectrum = self.recon_spectrum.cpu().numpy()
         
-        self.recon_obj = np.fft.ifft2(np.fft.ifftshift(self.recon_spectrum))
+        self.recon_obj = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(self.recon_spectrum)))
         
         pupil_amp = self.model.pupil_amp.detach()  # Detach from computation graph
         pupil_pha = self.model.pupil_pha.detach()

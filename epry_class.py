@@ -195,6 +195,7 @@ class EPRy:
             #                                                   desc="Processing", total=len(self.images), unit="images")):
             for i, (image, kx_iter, ky_iter) in tqdm(enumerate(zip(self.images, self.kout_vec[:, 0], self.kout_vec[:, 1]))):
                 
+                #self._update_spectrum(image, kx_iter, ky_iter)
                 self._update_spectrum(image, kx_iter, ky_iter)
                 
                 if np.any(np.isnan(self.hr_fourier_image)):
@@ -252,9 +253,9 @@ class EPRy:
         ky_cidx = round((ky_iter - self.ky_min_n) / self.dky)
         ky_lidx = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
         ky_hidx = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
+
         
-        pupil_func_patch = self.pupil_func
-        image_FT = self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx] * pupil_func_patch
+        image_FT = self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx] * self.pupil_func
         #image_FT *= (self.nx_lr/self.nx_hr)**2
         
         image_lr = inverse_fft(image_FT) #(ifftshift(image_FT))
@@ -265,8 +266,8 @@ class EPRy:
         
         
         # Compute update weight factor
-        weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
-        weight_factor_obj = self.beta * self.compute_weight_fac(self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx])
+        weight_fac_pupil = self.alpha * self.compute_weight_fac(self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx])
+        weight_factor_obj = self.beta * self.compute_weight_fac(self.pupil_func)
 
         if np.any(np.isnan(np.sqrt(image))):
             raise ValueError(f"There is a Nan in the image")
@@ -284,7 +285,7 @@ class EPRy:
         # Update Pupil Function 
         self.pupil_func += weight_factor_obj * delta_lowres_ft
 
-        image_lr_new = np.abs(ifft2(ifftshift(self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx]*self.pupil_func)))**2
+        image_lr_new = np.abs(inverse_fft(self.hr_fourier_image[kx_lidx:kx_hidx, ky_lidx:ky_hidx]*self.pupil_func))**2
         
         self.iter_loss+=self._compute_loss(image_lr_new, image)
         
@@ -303,7 +304,7 @@ class EPRy:
         fig, axes = plt.subplots(2, 2, figsize=(8, 8))
                 
         # Initialize the plots with the initial image
-        img_amp = axes[0,0].imshow(np.abs(self.hr_obj_image), vmin =.2, vmax = 1, cmap='viridis')
+        img_amp = axes[0,0].imshow(np.abs(self.hr_obj_image), cmap='viridis') #, vmin =.2, vmax = 1, cmap='viridis')
         axes[0,0].set_title("Object Amplitude")
         cbar_amp = plt.colorbar(img_amp, ax=axes[0,0])
 
@@ -355,12 +356,12 @@ class EPRy:
 
         amp_mean = np.mean(amplitude_obj)
         vmin = max(amp_mean + 2 * amp_mean, 0)
-        vmax = amp_mean + 10 * amp_mean
+        vmax = amp_mean + 5 * amp_mean
         img_amp.set_clim(vmin, vmax)
     
         ft_mean = np.mean(amplitude_ft)
         vmin = ft_mean + 2 * ft_mean
-        vmax = ft_mean + 10 * ft_mean
+        vmax = ft_mean + 5 * ft_mean
         fourier_amp.set_clim(vmin, vmax)
             
         clear_output(wait=True)
@@ -504,7 +505,7 @@ class EPRy_lr(EPRy):
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_obj_image.shape
 
-    def _update_spectrum(self, image, kx_iter, ky_iter):
+    def _update_spectrum(self, image,  ky_iter, kx_iter):
         """Handles the Fourier domain update."""
         kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
         kx_lidx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx), 0))
@@ -514,9 +515,12 @@ class EPRy_lr(EPRy):
         ky_lidx = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
         ky_hidx = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
 
+        
         ctf_patch = self.ctf[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
         pupil_func_patch = self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
-        image_FT = self.hr_fourier_image * pupil_func_patch 
+
+        
+        image_FT = self.hr_fourier_image * pupil_func_patch #* ctf_patch
         
         #image_lr = fftshift(ifft2(ifftshift(image_FT)))
         image_lr = inverse_fft(image_FT) #ifft2(ifftshift(image_FT))
@@ -524,7 +528,7 @@ class EPRy_lr(EPRy):
         
         image_lr_update = np.sqrt(image) * np.exp(1j *np.angle(image_lr))
         
-        image_FT_update = forward_fft(image_lr_update) * ctf_patch #(fft2(image_lr_update)) 
+        image_FT_update = forward_fft(image_lr_update) #* ctf_patch #(fft2(image_lr_update)) 
 
         
         weight_fac_pupil = self.alpha * self.compute_weight_fac(pupil_func_patch)
@@ -538,13 +542,13 @@ class EPRy_lr(EPRy):
             raise ValueError("There is a Nan value, check the configurations ")
             
         # Update Pupil Function 
-        self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += weight_factor_obj * delta_lowres_ft #* ctf_patch
+        self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx] += weight_factor_obj * delta_lowres_ft * ctf_patch
 
         new_exit = self.hr_fourier_image*self.pupil_func[kx_lidx:kx_hidx, ky_lidx:ky_hidx]
 
         image_lr_new = np.abs(inverse_fft(new_exit))**2
                 
-        self.iter_loss+=self._compute_loss(image_lr_new, image)
+        self.iter_loss += self._compute_loss(image_lr_new, image)
 
 
 class EPRy_high(EPRy):
