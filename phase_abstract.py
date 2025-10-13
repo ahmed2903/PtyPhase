@@ -27,8 +27,10 @@ class PhaseRetrievalBase(ABC):
         self.lr_psize = lr_psize
         self.alpha = alpha
         self.beta = beta
+        
         self.hr_obj_image = hr_obj_image
         self.hr_fourier_image = hr_fourier_image
+        
         self.losses = []
         self.iters_passed = 0
         self.iter_loss = 0
