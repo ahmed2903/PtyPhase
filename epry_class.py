@@ -17,29 +17,29 @@ from .phase_abstract import Plot, LivePlot, PhaseRetrievalBase
     
 class EPRy(PhaseRetrievalBase, Plot, LivePlot):
     
-    def __init__(self, images, pupil_func: str, kout_vec, ks_pupil, 
-                 lr_psize, alpha=0.1, beta=0.1, 
-                 hr_obj_image=None, hr_fourier_image=None,
-                 num_jobs=4):
+    # def __init__(self, images, pupil_func: str, kout_vec, ks_pupil, 
+    #              lr_psize, alpha=0.1, beta=0.1, 
+    #              hr_obj_image=None, hr_fourier_image=None,
+    #              num_jobs=4):
         
-        self.images = images # Coherent images
-        self.num_images = self.images.shape[0]
+    #     self.images = images # Coherent images
+    #     self.num_images = self.images.shape[0]
         
-        self.pupil_func = pupil_func
-        self.kout_vec = kout_vec
-        self.ks_pupil = ks_pupil
-        self.lr_psize = lr_psize
+    #     self.pupil_func = pupil_func
+    #     self.kout_vec = kout_vec
+    #     self.ks_pupil = ks_pupil
+    #     self.lr_psize = lr_psize
         
-        self.alpha = alpha
-        self.beta = beta
-        self.hr_obj_image = hr_obj_image
-        self.hr_fourier_image = hr_fourier_image  
+    #     self.alpha = alpha
+    #     self.beta = beta
+    #     self.hr_obj_image = hr_obj_image
+    #     self.hr_fourier_image = hr_fourier_image  
         
-        self.losses = []
-        self.iters_passed = 0
+    #     self.losses = []
+    #     self.iters_passed = 0
 
-        self.zoom_factor = 1
-        self.num_jobs = num_jobs
+    #     self.zoom_factor = 1
+    #     self.num_jobs = num_jobs
 
     ############################# Prepare ################################
     @time_it
@@ -149,14 +149,14 @@ class EPRy(PhaseRetrievalBase, Plot, LivePlot):
     ################################## Main Loop ##################################
     @time_it
     def iterate(self, iterations:int, live_plot=False, save_gif=False):
-
+        
         if live_plot:
-            fig, axes, img_amp, img_phase, fourier_amp, pupil_phase,loss_im = self._initialize_live_plot()
+            fig, axes, img_amp, img_phase, fourier_amp, pupil_phase, loss_im = self._initialize_live_plot()
             self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
-            self._update_live_plot(fig, axes, img_amp, img_phase, fourier_amp, pupil_phase,loss_im)
+            self._update_live_plot(img_amp, img_phase, fourier_amp, pupil_phase, loss_im, fig, self.iters_passed, axes)
+        
         if save_gif:
-  
-            frame_files = []
+            self.frame_files = []
         for it in range(iterations):
             
             self.iter_loss = 0
@@ -172,10 +172,8 @@ class EPRy(PhaseRetrievalBase, Plot, LivePlot):
                 if np.any(np.isnan(self.hr_obj_image)):
                     raise ValueError(f"There is a Nan in the Object image for {it}-th iteration,{i}-th image")
                 
-            if live_plot:
-                # Update the HR object image after all spectrum updates in this iteration
-                self.hr_obj_image = self.inverse_fft(self.hr_fourier_image) #ifft2(ifftshift(self.hr_fourier_image))
-                self._update_live_plot(img_amp, img_phase, fourier_amp, loss_im, fig, it, axes)
+            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
+            self._update_live_plot(img_amp, img_phase, fourier_amp, pupil_phase, loss_im, fig, self.iters_passed, axes)
             if save_gif:
                 # Save the frame
                 frame_file = f"tmp/frame_{it}.png"
@@ -185,9 +183,13 @@ class EPRy(PhaseRetrievalBase, Plot, LivePlot):
             self.losses.append(self.iter_loss/self.num_images)
             self.iters_passed += 1
 
+        self.post_process(save_gif=save_gif)
+        
+    def post_process(self, save_gif):
+        
         if save_gif:
             # Create the GIF using Pillow
-            frames = [Image.open(file) for file in frame_files]
+            frames = [Image.open(file) for file in self.frame_files]
             frames[0].save(
                 "recon_gif.gif",
                 save_all=True,

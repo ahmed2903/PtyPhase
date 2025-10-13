@@ -14,8 +14,8 @@ class PhaseRetrievalBase(ABC):
                  lr_psize,
                  alpha=0.1, 
                  beta=0.1, 
-                 rec_obj_image = None, 
-                 rec_fourier_image = None,
+                 hr_fourier_image = None, 
+                 hr_obj_image = None,
                  num_jobs=4, 
                  backend="numpy"):
         
@@ -27,10 +27,11 @@ class PhaseRetrievalBase(ABC):
         self.lr_psize = lr_psize
         self.alpha = alpha
         self.beta = beta
-        self.rec_obj_image = rec_obj_image
-        self.rec_fourier_image = rec_fourier_image
+        self.hr_obj_image = hr_obj_image
+        self.hr_fourier_image = hr_fourier_image
         self.losses = []
         self.iters_passed = 0
+        self.iter_loss = 0
         self.zoom_factor = 1
         self.num_jobs = num_jobs
             
@@ -49,10 +50,10 @@ class PhaseRetrievalBase(ABC):
         """Algorithm-specific Fourier update step."""
         pass
     
-    @abstractmethod
-    def post_process(self, *args, **kwargs):
-        """Finalize results, cleanup, plotting."""
-        pass
+    # @abstractmethod
+    # def post_process(self, *args, **kwargs):
+    #     """Finalize results, cleanup, plotting."""
+    #     pass
     
     @staticmethod
     def _compute_loss(pred, target):
@@ -128,8 +129,8 @@ class LivePlot:
             loss_im: Line object for loss plot.
         """
         # Create figure with GridSpec for custom layout
-        fig = plt.figure(figsize=(12, 10))
-        gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
+        fig = plt.figure(figsize=(8, 12))
+        gs = fig.add_gridspec(3, 2, hspace=0.05, wspace=0.2)
         
         # First row - 2 columns
         ax_amp = fig.add_subplot(gs[0, 0])
@@ -146,7 +147,7 @@ class LivePlot:
         axes = [[ax_amp, ax_phase], [ax_fourier, ax_pupil], ax_loss]
         
         # Initialize the plots with the initial image
-        img_amp = ax_amp.imshow(np.abs(self.hr_obj_image), vmin=0.2, vmax=1, cmap='viridis')
+        img_amp = ax_amp.imshow(np.abs(self.hr_obj_image), cmap='viridis')
         ax_amp.set_title("Object Amplitude")
         cbar_amp = plt.colorbar(img_amp, ax=ax_amp)
         
@@ -155,13 +156,13 @@ class LivePlot:
         img_phase.set_clim(-np.pi, np.pi)
         cbar_phase = plt.colorbar(img_phase, ax=ax_phase)
         
-        fourier_amp = ax_fourier.imshow(np.abs(self.hr_fourier_image), cmap='viridis')
+        fourier_amp = ax_fourier.imshow(np.log1p(np.abs(self.hr_fourier_image)), cmap='viridis')
         ax_fourier.set_title("Fourier Amplitude")
         cbar_fourier = plt.colorbar(fourier_amp, ax=ax_fourier)
         
         # Hide the extra subplot or use it for something else
         pupil_phase = ax_pupil.imshow(np.angle(self.pupil_func), cmap='viridis')
-        ax_fourier.set_title("Pupil Phase")
+        ax_pupil.set_title("Pupil Phase")
         cbar_pupil = plt.colorbar(pupil_phase, ax=ax_pupil)
         
         
@@ -192,8 +193,8 @@ class LivePlot:
         """
         amplitude_obj = np.abs(self.hr_obj_image)
         phase_obj = np.angle(self.hr_obj_image)
-        amplitude_ft = np.abs(self.hr_fourier_image)
-        pupil_pha = np.agnel(self.pupil_func)
+        amplitude_ft =np.log1p(np.abs(self.hr_fourier_image))
+        pupil_pha = np.angle(self.pupil_func)
         
         img_amp.set_data(amplitude_obj)
         img_phase.set_data(phase_obj)
@@ -211,17 +212,17 @@ class LivePlot:
         if it > 1:
             ax_loss.set_yscale('log')
         
-        # Update amplitude colormap limits
-        amp_mean = np.mean(amplitude_obj)
-        vmin = max(amp_mean + 2 * amp_mean, 0)
-        vmax = amp_mean + 10 * amp_mean
-        img_amp.set_clim(vmin, vmax)
+        # # Update amplitude colormap limits
+        # amp_mean = np.mean(amplitude_obj)
+        # vmin = max(amp_mean + 2 * amp_mean, 0)
+        # vmax = amp_mean + 4 * amp_mean
+        # img_amp.set_clim(vmin, vmax)
         
-        # Update Fourier amplitude colormap limits
-        ft_mean = np.mean(amplitude_ft)
-        vmin = ft_mean + 2 * ft_mean
-        vmax = ft_mean + 10 * ft_mean
-        fourier_amp.set_clim(vmin, vmax)
+        # # Update Fourier amplitude colormap limits
+        # ft_mean = np.mean(amplitude_ft)
+        # vmin = ft_mean + 2 * ft_mean
+        # vmax = ft_mean + 4 * ft_mean
+        # fourier_amp.set_clim(vmin, vmax)
         
         clear_output(wait=True)
         display(fig)
