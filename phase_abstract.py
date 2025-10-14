@@ -47,7 +47,7 @@ class PhaseRetrievalBase(ABC):
         """Run main reconstruction loop."""
         pass
 
-    @abstractmethod
+    
     def _update_spectrum(self, image, kx_iter, ky_iter):
         """Algorithm-specific Fourier update step."""
         pass
@@ -140,7 +140,7 @@ class LivePlot:
         
         # Second row - 2 columns
         ax_fourier = fig.add_subplot(gs[1, 0])
-        ax_pupil= fig.add_subplot(gs[1, 1])  # Extra plot if needed
+        ax_pupil= fig.add_subplot(gs[1, 1])  
         
         # Third row - single column spanning both columns
         ax_loss = fig.add_subplot(gs[2, :])
@@ -165,6 +165,7 @@ class LivePlot:
         # Hide the extra subplot or use it for something else
         pupil_phase = ax_pupil.imshow(np.angle(self.pupil_func), cmap='viridis')
         ax_pupil.set_title("Pupil Phase")
+        pupil_phase.set_clim(-np.pi, np.pi)
         cbar_pupil = plt.colorbar(pupil_phase, ax=ax_pupil)
         
         
@@ -217,14 +218,15 @@ class LivePlot:
         # # Update amplitude colormap limits
         # amp_mean = np.mean(amplitude_obj)
         # vmin = max(amp_mean + 2 * amp_mean, 0)
-        # vmax = amp_mean + 4 * amp_mean
-        # img_amp.set_clim(vmin, vmax)
+        
+        vmax = amplitude_obj.max()
+        img_amp.set_clim(vmin=None, vmax = vmax)
         
         # # Update Fourier amplitude colormap limits
         # ft_mean = np.mean(amplitude_ft)
         # vmin = ft_mean + 2 * ft_mean
-        # vmax = ft_mean + 4 * ft_mean
-        # fourier_amp.set_clim(vmin, vmax)
+        vmax = amplitude_ft.max()
+        fourier_amp.set_clim(vmin=None, vmax = vmax)
         
         clear_output(wait=True)
         display(fig)

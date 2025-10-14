@@ -18,7 +18,7 @@ from .utils_zernike import *
 
 from .phase_abstract import Plot, LivePlot, PhaseRetrievalBase
 
-class difference_map(PhaseRetrievalBase, Plot, LivePlot):
+class DM(PhaseRetrievalBase, Plot, LivePlot):
 
     def __init__(self, backend = 'threading', **kwargs):
 
@@ -63,6 +63,8 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
         self.upsample_coherent_images()
         
         self._initiate_recons_images()
+
+        self.PSI_FT_centred = self._initialize_exit()
     
     def _upsample_coh_img(self, image, shape):
         
@@ -70,10 +72,11 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
         
         new_image_FT = pad_to_shape(image_FT, shape)
         
-        upsamp_img = np.abs(self.inverse_fft(new_image_FT))/ (self.Nr1**2/self.Npupil_rows_up**2) #Attention!!
+        upsamp_img = np.abs(self.inverse_fft(new_image_FT))/ (image.shape[0]**2/new_image_FT.shape[0]**2) #Attention!!
 
         return upsamp_img
-    
+
+    @time_it
     def upsample_coherent_images(self):
         
         padded_images = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
@@ -92,20 +95,25 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
     def _initiate_recons_images(self):
         
         if self.hr_obj_image is None and self.hr_fourier_image is None: 
+            
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
+            self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
+            self.hr_obj_image = pad_to_shape(self.hr_obj_image, self.pupil_func.shape)
         
         elif self.hr_obj_image is not None:
             self.hr_fourier_image = self.forward_fft(self.hr_obj_image)
+            self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
+            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
             
         elif self.hr_fourier_image is not None:
+            self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
             self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
+            
             
         self.nx_lr, self.ny_lr = self.images[0].shape
         self.nx_hr, self.ny_hr = self.hr_fourier_image.shape
-        
-        self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
-        self.hr_obj_image = pad_to_shape(self.hr_obj_image, self.pupil_func.shape)
+
         
     def _load_pupil(self):
         
@@ -157,16 +165,7 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
         self.pupil_func = amp_array* np.exp(1j*full_array)
     
     
-    def iterate(self, iterations, live_plot = True):
-
-        
-        # Initial Guess
-        phi_0 = np.random.random(self.pupil_func.shape)
-        #self.hr_obj_image = self.images[0]*np.exp(1j*0.02*phi_0)
-            
-        #self.hr_fourier_image = self.forward_fft(self.hr_obj_image)
-
-        self._initialize_exit()
+    def iterate(self, iterations, pupil_update_step = 1, live_plot = True):
 
         if live_plot:
             fig, axes, img_amp, img_phase, fourier_amp, pupil_phase, loss_im = self._initialize_live_plot()
@@ -174,18 +173,25 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
             self._update_live_plot(img_amp, img_phase, fourier_amp, pupil_phase, loss_im, fig, self.iters_passed, axes)
         
         for it in range(iterations):
-            print(f"iteration {it+1}")
+            print(f"iteration {self.iters_passed+1}")
             
-            prev_objectFT = self.hr_obj_image
-            prev_PSI = self.PSI_FT_centred 
+            prev_objectFT = self.hr_fourier_image
+
+            prev_PSI = self.PSI_FT_centred
                         
             self.hr_fourier_image, pupilss = self._objectFT_update(self.pupil_func, self.PSI_FT_centred )
             
-            self.PSI_FT_centred, this_R = self.difference_map_engine(self.PSI_FT_centred, self.hr_fourier_image, self.pupil_func, self.coherent_imgs_upsampled)
+            self.PSI_FT_centred, this_R = self._engine(self.PSI_FT_centred, self.hr_fourier_image, self.pupil_func, self.coherent_imgs_upsampled)
             
-            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image )
+            self.losses.append(this_R/self.num_images)
+            self.iter_loss = this_R
+            self.iters_passed += 1
+            
+            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
+            
             # update pupil
-            self.pupil_func = self._pupil_update()
+            if self.iters_passed % pupil_update_step == 0 and self.iters_passed != 0:
+                self.pupil_func, _ = self._pupil_update(prev_objectFT, prev_PSI)
             
             if live_plot:
                 self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
@@ -210,13 +216,13 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
         return PSI_n_i, err_im
 
 
-    def difference_map_engine(self, PSI, objectFT, pupil, images, n_jobs=-1):
+    def _engine(self, PSI, objectFT, pupil, images):
         
-        results = Parallel(n_jobs=n_jobs, backend = self.backend)(
+        results = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
             delayed(self._process_single_image)(
                 i, image, kx_iter, ky_iter, PSI[i], objectFT, pupil
             )
-            for i, (image, kx_iter, ky_iter) in enumerate(zip(images, self.ks[:, 0], self.ks[:, 1]))
+            for i, (image, kx_iter, ky_iter) in enumerate(zip(images, self.kout_vec[:, 0], self.kout_vec[:, 1]))
         )
         
         PSI_n = np.array([r[0] for r in results])
@@ -224,7 +230,6 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
         
         return PSI_n, err_tot
         
-    
     
     ######### INITIALISE EXIT ########## 
     
@@ -237,6 +242,7 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
         this_PSI = self._get_exitFT(this_pupil, objectFT)
         return this_PSI
 
+    @time_it
     def _initialize_exit(self):
         '''
         exit initialization where the pupil function and the object spectrum
@@ -245,7 +251,7 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
         
         exit_FT_centred = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
             delayed(self._compute_single_exit)(i, kx_iter, ky_iter, self.pupil_func, self.hr_fourier_image)
-            for i, (kx_iter, ky_iter) in enumerate(self.ks)
+            for i, (kx_iter, ky_iter) in enumerate(self.kout_vec)
         )
         
         return np.array(exit_FT_centred)
@@ -263,28 +269,27 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
         
         return this_PSI, denom_contrib, numer_contrib
     
-    def _pupil_update(self, objectFT, PSI, pupil_func_abs, n_jobs=-1):
+    def _pupil_update(self, objectFT, PSI):
         '''
         Updating the pupil function
         '''        
-        results = Parallel(n_jobs=self.num_jobs)(
-            delayed(self._process_single_pupil_update, backend = self.backend)(
+        results = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
+            delayed(self._process_single_pupil_update)(
                 i, kx_iter, ky_iter, objectFT, PSI[i]
             )
-            for i, (kx_iter, ky_iter) in enumerate(self.ks)
+            for i, (kx_iter, ky_iter) in enumerate(self.kout_vec)
         )
-        
-        # Unpack results
+
         PSI_FT_shifted = np.array([r[0] for r in results])
-        denom_contribs = [r[1] for r in results]
-        numer_contribs = [r[2] for r in results]
+        denom_contribs = np.array([r[1] for r in results])
+        numer_contribs = np.array([r[2] for r in results])
         
         # Sum contributions
         denom = np.sum(denom_contribs, axis=0)
         numer = np.sum(numer_contribs, axis=0)
         
         pupil_func_update = numer / (denom + 1e-15)
-        pupil_func_update = pupil_func_update * pupil_func_abs
+        pupil_func_update = pupil_func_update * np.abs(self.pupil_func)
         
         return pupil_func_update, PSI_FT_shifted
 
@@ -303,17 +308,15 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
         return this_pupil, denom_contrib, numer_contrib
 
 
-    def _objectFT_update(self, pupil, PSI_FT_centred, n_jobs=-1):
+    def _objectFT_update(self, pupil, PSI_FT_centred):
         
         print(f"Object FT updates")
         
-        # Parallel computation
         results = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
             delayed(self._process_single_ks)(i, kx_iter, ky_iter, pupil, PSI_FT_centred)
-            for i, (kx_iter, ky_iter) in enumerate(self.ks)
+            for i, (kx_iter, ky_iter) in enumerate(self.kout_vec)
         )
         
-        # Unpack results
         pupil_patches = [r[0] for r in results]
         denom_contribs = [r[1] for r in results]
         numer_contribs = [r[2] for r in results]
@@ -328,6 +331,17 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
     
     
     ###### Helpers
+    def project_data( self, image, arr_FT):
+        '''
+        measurement projection
+        '''
+        psi =  self.inverse_fft(arr_FT) 
+        
+        psi_new = np.sqrt(image) * np.exp(1j*np.angle(psi))
+        
+        PSI_PM  =  self.forward_fft(psi_new)  
+        
+        return PSI_PM
         
 
     def _shift_objectFT(self, kx_iter, ky_iter):
@@ -390,18 +404,19 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
         ky_lidx = round(max(ky_cidx - self.omega_obj_y / ( 2*self.dky), 0))
         ky_hidx = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
 
-        rl = self.Npupil_rows_up//2 - self.Nr1//2
-        rh = self.Npupil_rows_up//2 + self.Nr1//2 
-        cl = self.Npupil_cols_up//2 - self.Nc1//2
-        ch = self.Npupil_cols_up//2 + self.Nc1//2 
-
+        
+        rl = self.pupil_func.shape[0]//2 - self.Nr1//2
+        rh = self.pupil_func.shape[0]//2 + self.Nr1//2
+        cl = self.pupil_func.shape[1]//2 - self.Nc1//2
+        ch = self.pupil_func.shape[1]//2 + self.Nc1//2
+        
         object_patch[kx_lidx:kx_hidx, ky_lidx:ky_hidx] = objectFT[rl:rh, cl:ch]  
         
         return object_patch
     
     def compute_error(self, image, PSI):
 
-        image_cal = np.abs( self.inverse_fft(PSI) )
+        image_cal = np.abs( self.inverse_fft(PSI) )**2
         
         err_image = np.sum ( np.abs( image_cal - image ) )/ np.sum(image)
 
@@ -409,31 +424,216 @@ class difference_map(PhaseRetrievalBase, Plot, LivePlot):
 
         
 
-    def project_data( self, image, arr_FT):
-        '''
-        measurement projection
-        '''
-        psi =  self.inverse_fft(arr_FT) 
-        
-        psi_new = np.sqrt(image) * np.exp(1j*np.angle(psi))
-        
-        PSI_PM  =  self.forward_fft(psi_new)  
-        
-        return PSI_PM
+    
+
+############# OTHER ALGORITHMS ################
 
 
+class RAAR(DM):
+    def __init__(self, beta = 1.0, **kwargs):
 
+        super().__init__(**kwargs)
+        self.beta = beta 
+    
+    def _process_single_image(self, i, image, kx_iter, ky_iter, PSI_i, objectFT, pupil):
+    
+        this_pupil = self._get_pupil_patch_centred(kx_iter, ky_iter, pupil)
+        
+        Ps_psi = self._get_exitFT(this_pupil, objectFT)
+        
+        Pm_psi = self.project_data(image, Ps_psi)
+        
+        # RAAR update formula (different from difference map)
+        PSI_n_i = self.beta * (PSI_i - Ps_psi + Pm_psi) + (1 - self.beta) * Ps_psi
+        
+        err_im = self.compute_error(image, Ps_psi)
+        
+        return PSI_n_i, err_im
+    
+    def _engine(self, PSI, objectFT, pupil, images, beta=0.9):
+        
+        results = Parallel(n_jobs=self.num_jobs, backend=self.backend)(
+            delayed(self._process_single_image_raar)(
+                i, image, kx_iter, ky_iter, PSI[i], objectFT, pupil, beta
+            )
+            for i, (image, kx_iter, ky_iter) in enumerate(zip(images, self.kout_vec[:, 0], self.kout_vec[:, 1]))
+        )
+        
+        PSI_n = np.array([r[0] for r in results])
+        err_tot = sum(r[1] for r in results)
+        
+        return PSI_n, err_tot
     
             
+class ePIE(DM):
+    def __init__(self, alpha = 1.0, beta_obj = 0.9, beta_pupil = 0.9, **kwargs):
+
+        super().__init__(**kwargs)
+        self.alpha = alpha 
+        self.beta_obj = beta_obj
+        self.beta_pupil = beta_pupil 
+        
+    def _process_single_image(self, i, image, kx_iter, ky_iter, PSI_i, objectFT, pupil):
+    
+        this_pupil = self._get_pupil_patch_centred(kx_iter, ky_iter, pupil)
+        
+        Ps_psi = self._get_exitFT(this_pupil, objectFT)
+        
+        Pm_psi = self.project_data(image, Ps_psi)
+        
+        # ePIE update: simple weighted difference
+        PSI_n_i = PSI_i + self.alpha * (Pm_psi - Ps_psi)
+        
+        err_im = self.compute_error(image, Ps_psi)
+        
+        return PSI_n_i, err_im
+        
+    def _process_single_ks(self, i, kx_iter, ky_iter, pupil, PSI_FT_centred):
+        """ePIE object update with position-dependent step size"""
+        this_pupil = self._get_pupil_patch_centred(kx_iter, ky_iter, pupil)
+        
+        # Weight by maximum intensity
+        max_pupil_intensity = np.max(np.abs(this_pupil)**2)
+        
+        denom_contrib = np.abs(this_pupil)**2 / max_pupil_intensity
+        
+        this_PSI = PSI_FT_centred[i]
+        numer_contrib = np.conjugate(this_pupil) * this_PSI / max_pupil_intensity
+        
+        return this_pupil, denom_contrib, numer_contrib
+    
+    def _objectFT_update(self, pupil, PSI_FT_centred):
+        """ePIE update: objectFT_new = objectFT_old + beta * update"""
+        
+        results = Parallel(n_jobs=self.num_jobs, backend=self.backend)(
+            delayed(self._process_single_ks)(i, kx_iter, ky_iter, pupil, PSI_FT_centred)
+            for i, (kx_iter, ky_iter) in enumerate(self.kout_vec)
+        )
+        
+        pupil_patches = [r[0] for r in results]
+        denom_contribs = [r[1] for r in results]
+        numer_contribs = [r[2] for r in results]
+        
+        denom = np.sum(denom_contribs, axis=0)
+        numer = np.sum(numer_contribs, axis=0)
+        
+        # ePIE applies update as increment rather than replacement
+        update = numer / (denom + 1e-15)
+        objectFT_update = self.hr_fourier_image + self.beta_obj * update
+        
+        return objectFT_update, pupil_patches
+        
+    def _process_single_pupil(self, i, kx_iter, ky_iter, objectFT, PSI_i):
+        """ePIE pupil update with position-dependent weighting"""
+        this_objectFT = self._shift_signalFT(kx_iter, ky_iter, objectFT)
+        
+        # Weight by maximum intensity
+        max_obj_intensity = np.max(np.abs(this_objectFT)**2)
+        
+        denom_contrib = np.abs(this_objectFT)**2 / max_obj_intensity
+        
+        this_PSI = self._shift_signalFT(kx_iter, ky_iter, PSI_i)
+        
+        numer_contrib = np.conjugate(this_objectFT) * this_PSI / max_obj_intensity
+        
+        return this_PSI, denom_contrib, numer_contrib
+    
+    def _pupil_update(self, objectFT, PSI, pupil_current):
+        '''
+        ePIE pupil update: incremental with smaller step size
+        '''        
+        results = Parallel(n_jobs=self.num_jobs, backend=self.backend)(
+            delayed(self._process_single_pupil)(
+                i, kx_iter, ky_iter, objectFT, PSI[i]
+            )
+            for i, (kx_iter, ky_iter) in enumerate(self.kout_vec)
+        )
+        
+        PSI_FT_shifted = np.array([r[0] for r in results])
+        denom_contribs = np.array([r[1] for r in results])
+        numer_contribs = np.array([r[2] for r in results])
+        
+        denom = np.sum(denom_contribs, axis=0)
+        numer = np.sum(numer_contribs, axis=0)
+        
+        # Incremental update instead of replacement
+        pupil_update = numer / (denom + 1e-15)
+        pupil_func_update = pupil_current + self.beta_pupil * (pupil_update - pupil_current)
+        
+        # Optional: maintain amplitude constraint
+        pupil_func_update = pupil_func_update * np.abs(self.pupil_func) / np.abs(pupil_func_update)
+        
+        return pupil_func_update, PSI_FT_shifted
+        
+class DM_PIE(DM):
+    def __init__(self, alpha = 1.0, **kwargs):
+
+        super().__init__(**kwargs)
+        self.alpha = alpha 
+        
+    def _process_single_image(self, i, image, kx_iter, ky_iter, PSI_i, objectFT, pupil):
+    
+        this_pupil = self._get_pupil_patch_centred(kx_iter, ky_iter, pupil)
+        
+        Ps_psi = self._get_exitFT(this_pupil, objectFT)
+        
+        Rs_psi = (1 + self.alpha) * Ps_psi - self.alpha * PSI_i
+        
+        Pm_rpsi = self.project_data(image, Rs_psi)
+        
+        PSI_n_i = PSI_i + Pm_rpsi - Ps_psi
+        
+        err_im = self.compute_error(image, Ps_psi)
+        
+        return PSI_n_i, err_im
 
         
+
+class HPR(DM):
+
+    def __init__(self, beta = 0.9, **kwargs):
+
+        super().__init__(**kwargs)
+        self.alpha = beta 
+
+    def _process_single_image(self, i, image, kx_iter, ky_iter, PSI_i, objectFT, pupil):
+    
+        this_pupil = self._get_pupil_patch_centred(kx_iter, ky_iter, pupil)
         
-
+        Ps_psi = self._get_exitFT(this_pupil, objectFT)
         
+        Pm_psi = self.project_data(image, Ps_psi)
+        
+        # HPR update
+        Rs_psi = 2 * Pm_psi - Ps_psi
+        PSI_n_i = PSI_i + self.beta * (Rs_psi - PSI_i)
+        
+        err_im = self.compute_error(image, Ps_psi)
+        
+        return PSI_n_i, err_im
 
+class RAAR_momentum(DM):
+    def __init__(self, beta = 1.0, momentum=0.5, **kwargs):
 
+        super().__init__(**kwargs)
+        self.beta = beta 
+        self.momentum = momentum 
 
-
+    def _process_single_image(self, i, image, kx_iter, ky_iter, PSI_i, PSI_prev_i, objectFT, pupil):
+        
+        this_pupil = self._get_pupil_patch_centred(kx_iter, ky_iter, pupil)
+        
+        Ps_psi = self._get_exitFT(this_pupil, objectFT)
+        
+        Pm_psi = self.project_data(image, Ps_psi)
+        
+        # RAAR with momentum
+        PSI_update = self.beta * (PSI_i - Ps_psi + Pm_psi) + (1 - self.beta) * Ps_psi
+        PSI_n_i = PSI_update + self.momentum * (PSI_i - PSI_prev_i)
+        
+        err_im = self.compute_error(image, Ps_psi)
+        
+        return PSI_n_i, err_im
 
 
 
