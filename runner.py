@@ -3,8 +3,9 @@ import numpy as np
 from .phase_abstract import Plot, LivePlot, PhaseRetrievalBase
 from .utils_pr import *
 import inspect
+from IPython.display import display, clear_output
 
-from algoritm_kernels import AlgorithmKernel
+from .algorithms import AlgorithmKernel
 
 class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
 
@@ -12,6 +13,7 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
         
         
         if live_plot:
+            clear_output(wait=True)
             fig, axes, img_amp, img_phase, fourier_amp, pupil_phase, loss_im = self._initialize_live_plot()
             self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
             self._update_live_plot(img_amp, img_phase, fourier_amp, pupil_phase, loss_im, fig, self.iters_passed, axes)
@@ -32,7 +34,10 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
                                   objectFT = self.hr_fourier_image, 
                                   pupil_func = self.pupil_func, 
                                   bounds = self.patch_bounds, 
-                                  images = self.coherent_imgs_upsampled)
+                                  images = self.coherent_imgs_upsampled,
+                                  n_jobs = self.num_jobs, 
+                                   backend = self.backend
+                                  )
             
             
             # Update pupil
@@ -107,4 +112,22 @@ class Pipeline:
             
             self.runner.solve(kernel, iterations=n, pupil_update_step=pupil_update_step, live_plot=live_plot)
 
+    def cycle(self, total_iterations: int, live_plot=False, pupil_update_step=1):
+        
+        iterations_done = 0
+        
+        while iterations_done < total_iterations:
+            
+            for kernel, n in self.steps:
+                
+                print(f"Running {kernel.__class__.__name__} for {n} iters")
+                
+                remaining = total_iterations - iterations_done
+                
+                iter_to_run = min(n, remaining)
+                
+                
+                self.runner.solve(kernel, iterations=n, pupil_update_step=pupil_update_step, live_plot=live_plot)
+                
+                iterations_done += iter_to_run
 

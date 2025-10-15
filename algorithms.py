@@ -113,7 +113,7 @@ class AlgorithmKernel:
     def _extract_patch_to_center(self, bounds, arr):
         
         (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-        out = np.zeros_like(self.pupil_func, dtype=complex)
+        out = np.zeros_like(arr, dtype=complex)
         out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
         return out
    
@@ -159,8 +159,27 @@ class DM(AlgorithmKernel):
         return Psi_n
 
 class RAAR(AlgorithmKernel):
-    pass
+    
+    def __init__(self, beta = 0.9, beta_decay = None):
 
+        self.beta = beta
+
+        self.beta_decay = beta_decay
+        
+    
+    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        
+        Psi_model = self.get_psi(bounds, pupil_func, objectFT, n_jobs, backend)
+        
+        Psi_project_model = self.project_data(images, Psi_model)
+
+        Psi_n = self.beta * (PSI - Psi_model + Psi_project_model) + (1-self.beta) * Psi_model
+
+        if self.beta_decay is not None:
+            self.beta *= self.beta_decay
+            
+        return Psi_n
+        
 class HPR(AlgorithmKernel):
     pass
 

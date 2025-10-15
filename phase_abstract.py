@@ -4,7 +4,7 @@ import numpy as np
 from IPython.display import display, clear_output
 from .plotting import plot_images_side_by_side
 import h5py
-from utils_pr import time_it, prepare_dims, calc_obj_freq_bandwidth, pad_to_shape, make_dims_even
+from .utils_pr import time_it, prepare_dims, calc_obj_freq_bandwidth, pad_to_shape, make_dims_even
 from scipy.ndimage import zoom 
 from joblib import Parallel, delayed
 
@@ -79,7 +79,9 @@ class PhaseRetrievalBase(ABC):
         
         (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
         out = np.zeros_like(self.pupil_func, dtype=complex)
+        
         out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
+        
         return out
     
     def _compute_single_exit(self, bounds, pupil, objectFT):
@@ -116,7 +118,7 @@ class PhaseRetrievalBase(ABC):
 
         ly = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
         hy = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
-
+        
         rl = self.pupil_shape [0]//2 - self.img_shape[0]//2
         rh = self.pupil_shape [0]//2 + self.img_shape[0]//2
         cl = self.pupil_shape [1]//2 - self.img_shape[1]//2
@@ -337,7 +339,7 @@ class LivePlot:
         
         
         # Loss plot on the full-width bottom row
-        loss_im, = ax_loss.plot([], [])
+        loss_im, = ax_loss.plot(range(self.iters_passed), self.losses)
         ax_loss.set_xlabel("Iteration")
         ax_loss.set_ylabel("Loss")
         ax_loss.grid(True, alpha=0.3)
