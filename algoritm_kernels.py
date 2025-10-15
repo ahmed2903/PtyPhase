@@ -1,0 +1,170 @@
+import numpy as np
+from joblib import Parallel, delayed
+
+
+fft_images = lambda imgs: np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(imgs, axes=(-2, -1)), axes=(-2, -1)), axes = (-2,-1))
+ifft_images = lambda imgs: np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(imgs, axes=(-2, -1)), axes=(-2, -1)), axes = (-2,-1))
+
+    
+
+class AlgorithmKernel:
+    """Base kernel interface for reciprocal-space phase retrieval algorithms.
+
+    Methods operate on arrays kept in the Runner.
+    Kernels should be stateless (store only hyperparameters).
+    """
+    
+    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):    
+        raise NotImplementedError
+    
+    ####### Object Updates ###########
+    
+    def _update_object_patch(self, bounds, pupil_func, psi):
+                
+        this_pupil = self._extract_patch_to_center(bounds, pupil_func)
+        
+        denom_contrib = np.abs(this_pupil)**2
+        
+        numer_contrib = np.conjugate(this_pupil) * psi
+        
+        return denom_contrib, numer_contrib
+    
+    
+    def update_object_ft(self, PSI: np.ndarray, pupil: np.ndarray, bounds: np.ndarray, n_jobs, backend):
+
+        results = Parallel(n_jobs=n_jobs, backend = backend)(
+            delayed(self._update_object_patch)(bound, pupil, psi_i)
+            for bound, psi_i in zip(bounds, PSI)
+        )
+        
+        denom_contribs = [r[0] for r in results]
+        numer_contribs = [r[1] for r in results]
+        
+        # Sum contributions
+        denom = np.sum(denom_contribs, axis=0)
+        numer = np.sum(numer_contribs, axis=0)
+        
+        objectFT_update = numer / (denom + 1e-15)
+        
+        return objectFT_update
+    
+    ############# Pupil Update ###############
+    
+    def _process_single_pupil_update(self, bounds, objectFT, psi):
+        """Process a single k_s iteration for pupil update"""
+    
+        
+        this_objectFT = self._insert_center_to_kvec_location(bounds, objectFT)
+        
+        denom_contrib = np.abs(this_objectFT)**2
+        
+        this_PSI = self._insert_center_to_kvec_location(bounds, psi)
+        
+        numer_contrib = np.conjugate(this_objectFT) * this_PSI
+        
+        return denom_contrib, numer_contrib
+    
+    def update_pupil(self, PSI, objectFT, bounds, pupil_func, n_jobs, backend):
+        '''
+        Updating the pupil function
+        '''        
+        results = Parallel(n_jobs=n_jobs, backend = backend)(
+            delayed(self._process_single_pupil_update)(
+                k_vector, objectFT, psi_i
+            )
+            for k_vector, psi_i in zip(bounds, PSI)
+        )
+
+        denom_contribs = np.array([r[0] for r in results])
+        numer_contribs = np.array([r[1] for r in results])
+        
+        # Sum contributions
+        denom = np.sum(denom_contribs, axis=0)
+        numer = np.sum(numer_contribs, axis=0)
+        
+        pupil_func_update = numer / (denom + 1e-15)
+        pupil_func_update = pupil_func_update * np.abs(pupil_func)
+        
+        return pupil_func_update
+    
+    ######## project data #########
+    
+    def project_data(self, images, Psi):
+        '''
+        measurement projection
+        '''
+        psi =  ifft_images(Psi) 
+        
+        psi_new = np.sqrt(images) * np.exp(1j*np.angle(psi))
+        
+        Psi_  =  fft_images(psi_new)  
+        
+        return Psi_
+    
+    ########## Helpers ##############
+
+    def _insert_center_to_kvec_location(self, bounds, arr):
+        
+        (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
+        out = np.zeros_like(arr, dtype=arr.dtype)
+        out[lx:hx, ly:hy] = arr[rl:rh, cl:ch]
+        return out
+    
+    def _extract_patch_to_center(self, bounds, arr):
+        
+        (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
+        out = np.zeros_like(self.pupil_func, dtype=complex)
+        out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
+        return out
+   
+    def _compute_single_exit(self, bounds, pupil, objectFT):
+        """Compute exit wave for a single k-vector"""
+        
+        this_pupil = self._extract_patch_to_center(bounds, pupil)
+        psi = this_pupil * objectFT
+        
+        return psi
+
+    def get_psi(self, bounds, pupil, objectFT, n_jobs, backened):
+        '''
+        exit initialization where the pupil function and the object spectrum
+        are at the centre
+        '''
+        
+        exit_FT_centred = Parallel(n_jobs=n_jobs, backend = backened)(
+            delayed(self._compute_single_exit)(bound, pupil, objectFT)
+            for bound in bounds
+        )
+        
+        return np.array(exit_FT_centred)
+    
+    def compute_error(self, old_psi, new_psi):
+        
+        err = np.linalg.norm(new_psi - old_psi) / (np.linalg.norm(old_psi) + 1e-12)
+        return err
+    
+
+class DM(AlgorithmKernel):
+    
+    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        
+        Psi_model = self.get_psi(bounds, pupil_func, objectFT, n_jobs, backend)
+        
+        Psi_reflection = 2 * Psi_model - PSI
+        
+        Psi_data_reflection = self.project_data(images, Psi_reflection)
+
+        Psi_n = PSI + Psi_data_reflection - Psi_model
+        
+        return Psi_n
+
+class RAAR(AlgorithmKernel):
+    pass
+
+class HPR(AlgorithmKernel):
+    pass
+
+class ePRY(AlgorithmKernel):
+    
+    pass
+

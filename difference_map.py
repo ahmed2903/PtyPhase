@@ -101,12 +101,12 @@ class DM(PhaseRetrievalBase, Plot, LivePlot):
             self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
             self.hr_obj_image = pad_to_shape(self.hr_obj_image, self.pupil_func.shape)
         
-        elif self.hr_obj_image is not None:
+        elif self.hr_fourier_image is None:
             self.hr_fourier_image = self.forward_fft(self.hr_obj_image)
             self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
             self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
             
-        elif self.hr_fourier_image is not None:
+        elif self.hr_obj_image is None:
             self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
             self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
             
@@ -373,6 +373,7 @@ class DM(PhaseRetrievalBase, Plot, LivePlot):
         pupil_func_patch = np.zeros_like(self.pupil_func).astype(complex) 
         
         kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
+        
         kx_lidx = round(max(kx_cidx - self.omega_obj_x / (2* self.dkx), 0))
         kx_hidx = round(kx_cidx + self.omega_obj_x / ( 2*self.dkx)) 
         
@@ -450,11 +451,11 @@ class RAAR(DM):
         
         return PSI_n_i, err_im
     
-    def _engine(self, PSI, objectFT, pupil, images, beta=0.9):
+    def _engine(self, PSI, objectFT, pupil, images):
         
         results = Parallel(n_jobs=self.num_jobs, backend=self.backend)(
-            delayed(self._process_single_image_raar)(
-                i, image, kx_iter, ky_iter, PSI[i], objectFT, pupil, beta
+            delayed(self._process_single_image)(
+                i, image, kx_iter, ky_iter, PSI[i], objectFT, pupil
             )
             for i, (image, kx_iter, ky_iter) in enumerate(zip(images, self.kout_vec[:, 0], self.kout_vec[:, 1]))
         )

@@ -2,11 +2,9 @@ from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
 import numpy as np
 from IPython.display import display, clear_output
+from numpy.fft import fft2, ifft2, fftshift, ifftshift
 from .plotting import plot_images_side_by_side
 import h5py
-from utils_pr import time_it, prepare_dims, calc_obj_freq_bandwidth, pad_to_shape, make_dims_even
-from scipy.ndimage import zoom 
-from joblib import Parallel, delayed
 
 class PhaseRetrievalBase(ABC):
     def __init__(self, images, 
@@ -19,12 +17,10 @@ class PhaseRetrievalBase(ABC):
                  hr_fourier_image = None, 
                  hr_obj_image = None,
                  num_jobs=4, 
-                 backend="threading"):
+                 backend="numpy"):
         
         self.images = images
         self.num_images = self.images.shape[0]
-        self.img_shape = self.images.shape[1:]
-        
         self.pupil_func = pupil_func
         self.kout_vec = kout_vec
         self.ks_pupil = ks_pupil
@@ -34,200 +30,37 @@ class PhaseRetrievalBase(ABC):
         
         self.hr_obj_image = hr_obj_image
         self.hr_fourier_image = hr_fourier_image
+        
         self.losses = []
         self.iters_passed = 0
         self.iter_loss = 0
-
+        self.zoom_factor = 1
         self.num_jobs = num_jobs
-        self.backend = backend
-
-    @time_it
+            
+    @abstractmethod
     def prepare(self, **kwargs):
-        
-        print("Preparing")
+        """Prepare reconstruction (dims, pupil, initial HR images, etc.)."""
+        pass
 
-        if 'extend' in kwargs:
-            self.extend = kwargs['extend']
-        else:
-            self.extend = None
-            
-        self._prep_images()
-        
-        self.kout_vec = np.array(self.kout_vec)
-        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.ks_pupil, self.lr_psize, extend = self.extend)
+    @abstractmethod
+    def iterate(self, iterations:int, live_plot=False, save_gif=False):
+        """Run main reconstruction loop."""
+        pass
 
-        self.kx_min_n, self.kx_max_n = self.bounds_x
-        self.ky_min_n, self.ky_max_n = self.bounds_y
-        self.dkx, self.dky = self.dks
-        
-        omegas = calc_obj_freq_bandwidth(self.lr_psize)
-        self.omega_obj_x, self.omega_obj_y = omegas
-
-        self._load_pupil()
-        
-        self.pupil_shape = self.pupil_func.shape
-        
-        self.upsample_coherent_images()
-        
-        self._initiate_recons_images()
-
-        self.compute_bounds()
-        
-        self.PSI = self.get_psi()
     
-    def _extract_patch_to_center(self, bounds, arr):
-        
-        (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-        out = np.zeros_like(self.pupil_func, dtype=complex)
-        out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
-        return out
+    def _update_spectrum(self, image, kx_iter, ky_iter):
+        """Algorithm-specific Fourier update step."""
+        pass
     
-    def _compute_single_exit(self, bounds, pupil, objectFT):
-        """Compute exit wave for a single k-vector"""
-        
-        this_pupil = self._extract_patch_to_center(bounds, pupil)
-        psi = this_pupil * objectFT
-        
-        return psi
-
-    @time_it
-    def get_psi(self):
-        '''
-        exit initialization where the pupil function and the object spectrum
-        are at the centre
-        '''
-        
-        exit_FT_centred = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
-            delayed(self._compute_single_exit)(bound, self.pupil_func, self.hr_fourier_image)
-            for bound in self.patch_bounds
-        )
-        
-        return np.array(exit_FT_centred)
+    # @abstractmethod
+    # def post_process(self, *args, **kwargs):
+    #     """Finalize results, cleanup, plotting."""
+    #     pass
     
-    def _compute_patch_bounds(self, kout):
+    @staticmethod
+    def _compute_loss(pred, target):
         
-        kx_iter, ky_iter = kout[:2]
-        
-        kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
-        ky_cidx = round((ky_iter - self.ky_min_n) / self.dky)
-
-        lx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx), 0))
-        hx = round(kx_cidx + self.omega_obj_x / (2 * self.dkx)) + (1 if self.nx_lr % 2 != 0 else 0)
-
-        ly = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
-        hy = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
-
-        rl = self.pupil_shape [0]//2 - self.img_shape[0]//2
-        rh = self.pupil_shape [0]//2 + self.img_shape[0]//2
-        cl = self.pupil_shape [1]//2 - self.img_shape[1]//2
-        ch =  self.pupil_shape [1]//2 + self.img_shape[1]//2
-
-        return (lx, hx, ly, hy), (rl, rh, cl, ch)
-    
-    def compute_bounds(self):
-
-        self.patch_bounds = []
-        
-        for kout in self.kout_vec:
-            (lx, hx, ly, hy), (rl, rh, cl, ch) = self._compute_patch_bounds(
-                kout)
-            
-            self.patch_bounds.append(((lx, hx, ly, hy), (rl, rh, cl, ch)))
-        
-        
-    def _upsample_coh_img(self, image, shape):
-        
-        image_FT = self.forward_fft(image)
-        
-        new_image_FT = pad_to_shape(image_FT, shape)
-        
-        upsamp_img = np.abs(self.inverse_fft(new_image_FT))/ (image.shape[0]**2/new_image_FT.shape[0]**2) #Attention!!
-
-        return upsamp_img
-
-    @time_it
-    def upsample_coherent_images(self):
-        
-        padded_images = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
-        delayed(self._upsample_coh_img)(image, self.pupil_func.shape) for image in self.images
-        )
-        
-        self.coherent_imgs_upsampled = np.array(padded_images)
-        
-    def _prep_images(self):
-        
-        self.images = np.array(self.images)
-    
-    def _initiate_recons_images(self):
-        
-        if self.hr_obj_image is None and self.hr_fourier_image is None: 
-            
-            self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
-            self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
-            self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
-            self.hr_obj_image = pad_to_shape(self.hr_obj_image, self.pupil_func.shape)
-        
-        elif self.hr_fourier_image is None:
-            self.hr_fourier_image = self.forward_fft(self.hr_obj_image)
-            self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
-            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
-            
-        elif self.hr_obj_image is None:
-            self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
-            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
-            
-            
-        self.nx_lr, self.ny_lr = self.images[0].shape
-        self.nx_hr, self.ny_hr = self.hr_fourier_image.shape
-        
-    def _load_pupil(self):
-        
-        dims = round((self.kx_max_n - self.kx_min_n)/self.dkx), round((self.ky_max_n - self.ky_min_n)/self.dky)
-        
-        dims = make_dims_even(dims)
-
-        full_array = np.zeros(dims)
-        amp_array = np.ones(dims)
-        
-        self.ctf = np.zeros(dims).astype(complex)
-        
-        if isinstance(self.pupil_func, str):
-            phase = np.load(self.pupil_func)
-        elif isinstance(self.pupil_func, np.ndarray):
-            phase = self.pupil_func
-        else:
-            phase = np.zeros(dims)
-        
-        # Get the scaling factors for each dimension
-        if self.extend == 'double':
-            factor = 2
-        elif self.extend == 'triple':
-            factor = 3
-        elif self.extend == 'quadruple':
-            factor = 4
-        elif self.extend == 'quintiple':
-            factor = 5
-        elif self.extend == None:
-            factor = 1
-        
-        scale_x = dims[0] / phase.shape[0] / factor
-        scale_y = dims[1] / phase.shape[1] / factor
-
-        # Scale the pupil phase array to match the required pupil dimensions
-        scaled_pupil_phase = zoom(phase, (scale_x, scale_y))
-        
-        # Calculate center indices
-        N, M = dims[0]//factor , dims[1]//factor
-        
-        start_x, start_y = (dims[0] - N) // 2, (dims[1] - M) // 2
-        end_x, end_y = start_x + N, start_y + M
-    
-        # Set central region to ones
-        full_array[start_x:end_x, start_y:end_y] = scaled_pupil_phase
-
-        self.ctf[start_x:end_x, start_y:end_y] = 1.0
-        
-        self.pupil_func = amp_array* np.exp(1j*full_array)
+        return np.sqrt(np.sum(np.abs(pred - target) ** 2)) 
     
     def save_reconsturction(self, file_path):
         """

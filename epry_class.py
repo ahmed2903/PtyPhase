@@ -1,18 +1,13 @@
 
 import numpy as np 
-from numpy.fft import fftshift, ifftshift, fft2, ifft2
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-from IPython.display import display, clear_output
 from tqdm.notebook import tqdm
-import h5py
 import os
 from .utils_pr import *
-from .plotting import plot_images_side_by_side, update_live_plot, initialize_live_plot
 from scipy.ndimage import fourier_shift
 from PIL import Image
 #from ..data_fs import * #downsample_array, upsample_images, pad_to_double
-from .phase_abstract import Plot, LivePlot, PhaseRetrievalBase
+from .epry_abstract import Plot, LivePlot, PhaseRetrievalBase
 
     
 class EPRy(PhaseRetrievalBase, Plot, LivePlot):
@@ -178,7 +173,7 @@ class EPRy(PhaseRetrievalBase, Plot, LivePlot):
                 # Save the frame
                 frame_file = f"tmp/frame_{it}.png"
                 plt.savefig(frame_file)
-                frame_files.append(frame_file)
+                self.frame_files.append(frame_file)
 
             self.losses.append(self.iter_loss/self.num_images)
             self.iters_passed += 1
@@ -199,7 +194,7 @@ class EPRy(PhaseRetrievalBase, Plot, LivePlot):
             )
             
             # Cleanup temporary frame files
-            for file in frame_files:
+            for file in self.frame_files:
                 os.remove(file)
                 
         self.hr_obj_image = self.inverse_fft(self.hr_fourier_image) #(ifftshift(self.hr_fourier_image))
