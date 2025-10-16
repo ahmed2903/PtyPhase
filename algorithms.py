@@ -64,7 +64,7 @@ class AlgorithmKernel:
         
         return denom_contrib, numer_contrib
     
-    def update_pupil(self, PSI, objectFT, bounds, pupil_func, n_jobs, backend):
+    def update_pupil(self, PSI, objectFT, bounds, pupil_func, ctf, n_jobs, backend):
         '''
         Updating the pupil function
         '''        
@@ -83,7 +83,7 @@ class AlgorithmKernel:
         numer = np.sum(numer_contribs, axis=0)
         
         pupil_func_update = numer / (denom + 1e-15)
-        pupil_func_update = pupil_func_update * np.abs(pupil_func) 
+        pupil_func_update = pupil_func_update * np.abs(ctf) 
         
         return pupil_func_update
     

@@ -50,6 +50,7 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
                                                       objectFT = self.hr_fourier_image, 
                                                       bounds = self.patch_bounds, 
                                                       pupil_func = self.pupil_func, 
+                                                      ctf = self.ctf,
                                                       n_jobs = self.num_jobs, 
                                                       backend= self.backend)
             

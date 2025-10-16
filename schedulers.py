@@ -68,8 +68,8 @@ class WeightScheduler:
         TV weight scheduler with ramp-up, plateau, and decay phases.
 
         Args:
-            start_epoch (int): Epoch to start increasing TV weight.
-            increase_epochs (int): Number of epochs to ramp up TV weight.
+            start_epoch (int): Epoch to start increasing  weight.
+            increase_epochs (int): Number of epochs to ramp up  weight.
             plateau_epochs (int): Number of epochs to hold alpha_max.
             alpha_max (float): Maximum TV weight value.
             gamma (float): Decay factor per epoch after plateau.
