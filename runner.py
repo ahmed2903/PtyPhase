@@ -8,16 +8,20 @@ from IPython.display import display, clear_output
 from .algorithms import AlgorithmKernel
 
 class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
+        self.liveplot_init = True
+        
     def solve(self, kernel: AlgorithmKernel, iterations: int, pupil_update_step: int = 1, live_plot: bool = False):
         
         
-        if live_plot:
-            clear_output(wait=True)
-            fig, axes, img_amp, img_phase, fourier_amp, pupil_phase, loss_im = self._initialize_live_plot()
+        if live_plot and self.liveplot_init:
+            self._initialize_live_plot()
             self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
-            self._update_live_plot(img_amp, img_phase, fourier_amp, pupil_phase, loss_im, fig, self.iters_passed, axes)
-        
+            self._update_live_plot()
+            self.liveplot_init = False
+            
         for it in range(iterations):
             
             old_PSI = self.PSI.copy()
@@ -52,12 +56,14 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
                         
             err_tot = kernel.compute_error(old_PSI, self.PSI)
             
-            self.losses.append(err_tot / max(1, self.num_images))
+            self.iter_loss = err_tot / max(1, self.num_images)
+            self.losses.append(self.iter_loss)
+            
             self.iters_passed += 1
 
             if live_plot:
                 self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
-                self._update_live_plot(img_amp, img_phase, fourier_amp, pupil_phase, loss_im, fig, self.iters_passed, axes)
+                self._update_live_plot()
     
     def get_state(self):
         return dict(

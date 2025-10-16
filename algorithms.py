@@ -74,7 +74,7 @@ class AlgorithmKernel:
             )
             for k_vector, psi_i in zip(bounds, PSI)
         )
-
+        
         denom_contribs = np.array([r[0] for r in results])
         numer_contribs = np.array([r[1] for r in results])
         
@@ -83,7 +83,7 @@ class AlgorithmKernel:
         numer = np.sum(numer_contribs, axis=0)
         
         pupil_func_update = numer / (denom + 1e-15)
-        pupil_func_update = pupil_func_update * np.abs(pupil_func)
+        pupil_func_update = pupil_func_update * np.abs(pupil_func) 
         
         return pupil_func_update
     
@@ -125,7 +125,7 @@ class AlgorithmKernel:
         
         return psi
 
-    def get_psi(self, bounds, pupil, objectFT, n_jobs, backened):
+    def project_model(self, bounds, pupil, objectFT, n_jobs, backened):
         '''
         exit initialization where the pupil function and the object spectrum
         are at the centre
@@ -140,7 +140,7 @@ class AlgorithmKernel:
     
     def compute_error(self, old_psi, new_psi):
         
-        err = np.linalg.norm(new_psi - old_psi) / (np.linalg.norm(old_psi) + 1e-12)
+        err = np.linalg.norm(new_psi - old_psi) 
         return err
     
 
@@ -148,7 +148,7 @@ class DM(AlgorithmKernel):
     
     def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
         
-        Psi_model = self.get_psi(bounds, pupil_func, objectFT, n_jobs, backend)
+        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
         
         Psi_reflection = 2 * Psi_model - PSI
         
@@ -168,22 +168,86 @@ class RAAR(AlgorithmKernel):
         
     
     def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
-        
-        Psi_model = self.get_psi(bounds, pupil_func, objectFT, n_jobs, backend)
-        
-        Psi_project_model = self.project_data(images, Psi_model)
 
-        Psi_n = self.beta * (PSI - Psi_model + Psi_project_model) + (1-self.beta) * Psi_model
+
+         
+        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
+
+        Psi_project_model = self.project_data(images, Psi_model)
+        
+
+        Psi_n = self.beta * Psi_project_model + (1-self.beta) * Psi_model
 
         if self.beta_decay is not None:
             self.beta *= self.beta_decay
             
         return Psi_n
-        
-class HPR(AlgorithmKernel):
-    pass
-
-class ePRY(AlgorithmKernel):
     
-    pass
 
+
+class AAR(AlgorithmKernel):
+    
+    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        
+        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
+
+        Psi_data_reflection = self.project_data(images, 2*Psi_model - PSI)
+
+        Psi_n = 0.5 * (PSI + Psi_data_reflection)
+
+        return Psi_n
+
+
+class HPR(AlgorithmKernel):
+    def __init__(self, beta = 0.9):
+
+        self.beta = beta
+    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
+
+        Psi_data_reflection = self.project_data(images, 2*Psi_model - PSI)
+
+        Psi_n = PSI + self.beta * (Psi_data_reflection - PSI)
+
+        return Psi_n
+
+
+class DM_PIE(AlgorithmKernel):
+    def __init__(self, alpha=0.9):
+
+        self.alpha = alpha
+
+    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
+
+        Psi_reflection = (1 + self.alpha) * Psi_model - self.alpha * PSI
+
+        Psi_data_reflection = self.project_data(images, Psi_reflection)
+
+        Psi_n = PSI + Psi_data_reflection - Psi_model
+
+        return Psi_n
+
+class ePIE(AlgorithmKernel):
+    def __init__(self, alpha_obj=0.9):
+
+        self.alpha_obj = alpha_obj
+
+    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        
+        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
+
+        Psi_data = self.project_data(images, Psi_model)
+
+        Psi_n = PSI + self.alpha_obj * (Psi_data - Psi_model)
+
+        return Psi_n
+
+    def compute_weight_fac(self, func):
+        """Compute weighting factor for phase retrieval update."""
+        
+        mod = np.abs(func) ** 2
+        return np.conjugate(func) / (mod.max() + 1e-23)
+  
+        
+        

@@ -188,10 +188,10 @@ class PhaseRetrievalBase(ABC):
         
         dims = make_dims_even(dims)
 
-        full_array = np.zeros(dims)
+        full_array = np.zeros(dims, dtype = complex)
         amp_array = np.ones(dims)
         
-        self.ctf = np.zeros(dims).astype(complex)
+        self.ctf = np.zeros(dims, dtype = complex)
         
         if isinstance(self.pupil_func, str):
             phase = np.load(self.pupil_func)
@@ -228,8 +228,9 @@ class PhaseRetrievalBase(ABC):
         full_array[start_x:end_x, start_y:end_y] = scaled_pupil_phase
 
         self.ctf[start_x:end_x, start_y:end_y] = 1.0
-        
-        self.pupil_func = amp_array* np.exp(1j*full_array)
+
+        self.pupil_func = full_array
+        # self.pupil_func = amp_array * np.exp(1j*full_array)
     
     def save_reconsturction(self, file_path):
         """
@@ -346,11 +347,13 @@ class LivePlot:
         
         plt.ion()  # Enable interactive mode
         plt.show()
+
+        self.fig, self.axes, self.img_amp, self.img_phase, self.fourier_amp, self.pupil_phase,self.loss_im = fig, axes, img_amp, img_phase, fourier_amp, pupil_phase,loss_im
         
-        return fig, axes, img_amp, img_phase, fourier_amp, pupil_phase,loss_im
+    #return fig, axes, img_amp, img_phase, fourier_amp, pupil_phase,loss_im
 
 
-    def _update_live_plot(self, img_amp, img_phase, fourier_amp, pupil_phase, loss_im, fig, it, axes):
+    def _update_live_plot(self):
         """
         Updates the live plot with new amplitude and phase images.
         
@@ -363,6 +366,8 @@ class LivePlot:
             it: Current iteration number.
             axes: List of axes objects.
         """
+        img_amp, img_phase, fourier_amp, pupil_phase, loss_im, fig, it, axes = self.img_amp, self.img_phase, self.fourier_amp, self.pupil_phase, self.loss_im, self.fig, self.iters_passed, self.axes
+        
         amplitude_obj = np.abs(self.hr_obj_image)
         phase_obj = np.angle(self.hr_obj_image)
         amplitude_ft =np.log1p(np.abs(self.hr_fourier_image))
@@ -377,7 +382,7 @@ class LivePlot:
         ax_loss = axes[2]  # Third row
         loss_im.set_xdata(range(self.iters_passed))
         loss_im.set_ydata(self.losses)
-        ax_loss.set_title(f"Iteration: {it}, loss: {self.iter_loss/self.num_images:.2f}", fontsize=12)
+        ax_loss.set_title(f"Iteration: {it}, loss: {self.iter_loss:.2f}", fontsize=12)
         ax_loss.relim()
         ax_loss.autoscale_view()
         

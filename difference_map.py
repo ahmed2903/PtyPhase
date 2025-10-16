@@ -16,7 +16,7 @@ from scipy.signal import convolve2d
 from skimage.restoration import unwrap_phase
 from .utils_zernike import *
 
-from .phase_abstract import Plot, LivePlot, PhaseRetrievalBase
+from .epry_abstract import Plot, LivePlot, PhaseRetrievalBase
 
 class DM(PhaseRetrievalBase, Plot, LivePlot):
 
@@ -121,7 +121,7 @@ class DM(PhaseRetrievalBase, Plot, LivePlot):
         
         dims = make_dims_even(dims)
 
-        full_array = np.zeros(dims)
+        full_array = np.zeros(dims, dtype = complex)
         amp_array = np.ones(dims)
         
         self.ctf = np.zeros(dims).astype(complex)
@@ -162,7 +162,7 @@ class DM(PhaseRetrievalBase, Plot, LivePlot):
 
         self.ctf[start_x:end_x, start_y:end_y] = 1.0
         
-        self.pupil_func = amp_array* np.exp(1j*full_array)
+        self.pupil_func = full_array #amp_array* np.exp(1j*full_array)
     
     
     def iterate(self, iterations, pupil_update_step = 1, live_plot = True):
@@ -240,6 +240,7 @@ class DM(PhaseRetrievalBase, Plot, LivePlot):
         """Compute exit wave for a single k-vector"""
         this_pupil = self._get_pupil_patch_centred(kx_iter, ky_iter, pupil)
         this_PSI = self._get_exitFT(this_pupil, objectFT)
+        
         return this_PSI
 
     @time_it
@@ -248,7 +249,7 @@ class DM(PhaseRetrievalBase, Plot, LivePlot):
         exit initialization where the pupil function and the object spectrum
         are at the centre
         '''
-        
+        print(self.hr_fourier_image.shape)
         exit_FT_centred = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
             delayed(self._compute_single_exit)(i, kx_iter, ky_iter, self.pupil_func, self.hr_fourier_image)
             for i, (kx_iter, ky_iter) in enumerate(self.kout_vec)
