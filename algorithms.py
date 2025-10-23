@@ -64,7 +64,7 @@ class AlgorithmKernel:
         
         return denom_contrib, numer_contrib
     
-    def update_pupil(self, PSI, objectFT, bounds, pupil_func, ctf, n_jobs, backend):
+    def update_pupil(self, PSI, objectFT, bounds, pupil_func, ctf, beta = 0.9, n_jobs=1, backend='threading'):
         '''
         Updating the pupil function
         '''        
@@ -83,7 +83,10 @@ class AlgorithmKernel:
         numer = np.sum(numer_contribs, axis=0)
         
         pupil_func_update = numer / (denom + 1e-15)
-        pupil_func_update = pupil_func_update * np.abs(ctf) 
+
+        # pupil_func_update = (1 - beta) * pupil_func + beta * pupil_func_update
+                
+        pupil_func_update *= np.abs(ctf)
         
         return pupil_func_update
     
@@ -171,12 +174,12 @@ class RAAR(AlgorithmKernel):
 
 
          
-        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
-
-        Psi_project_model = self.project_data(images, Psi_model)
+        Psi_reflection_model = 2*self.project_model(bounds, pupil_func, objectFT, n_jobs, backend) - PSI
+        
+        Psi_project_model = self.project_data(images, Psi_reflection_model)
         
 
-        Psi_n = self.beta * Psi_project_model + (1-self.beta) * Psi_model
+        Psi_n = self.beta * Psi_project_model + (1-self.beta) * PSI
 
         if self.beta_decay is not None:
             self.beta *= self.beta_decay

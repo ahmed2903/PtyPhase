@@ -26,12 +26,6 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
             
             old_PSI = self.PSI.copy()
             
-            # Update Fourier Spectrum
-            self.hr_fourier_image = kernel.update_object_ft(PSI = self.PSI, 
-                                                            pupil = self.pupil_func, 
-                                                            bounds = self.patch_bounds, 
-                                                            n_jobs = self.num_jobs, 
-                                                            backend = self.backend)
             
             # Update PSI for each image
             self.PSI = kernel.step(PSI=self.PSI, 
@@ -43,6 +37,12 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
                                    backend = self.backend
                                   )
             
+            # Update Fourier Spectrum
+            self.hr_fourier_image = kernel.update_object_ft(PSI = self.PSI, 
+                                                            pupil = self.pupil_func, 
+                                                            bounds = self.patch_bounds, 
+                                                            n_jobs = self.num_jobs, 
+                                                            backend = self.backend)
             
             # Update pupil
             if pupil_update_step > 0 and ((self.iters_passed + 1) % pupil_update_step == 0):
