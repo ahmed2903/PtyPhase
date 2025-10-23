@@ -4,6 +4,7 @@ from .phase_abstract import Plot, LivePlot, PhaseRetrievalBase
 from .utils_pr import *
 import inspect
 from IPython.display import display, clear_output
+from ZernikePolynomials import SquarePolynomials
 
 from .algorithms import AlgorithmKernel
 
@@ -13,7 +14,10 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
 
         self.liveplot_init = True
         
-    def solve(self, kernel: AlgorithmKernel, iterations: int, pupil_update_step: int = 1, live_plot: bool = False):
+    def solve(self, kernel: AlgorithmKernel, iterations: int, 
+              pupil_update_step: int = 1, 
+              zernike_projection = False,
+              live_plot: bool = False):
         
         
         if live_plot and self.liveplot_init:
@@ -53,7 +57,14 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
                                                       ctf = self.ctf,
                                                       n_jobs = self.num_jobs, 
                                                       backend= self.backend)
-            
+
+                if zernike_projection:
+                    
+                    pha = np.angle(self.pupil_func)
+                    amp = np.abs(self.pupil_func)
+                    
+                    self.pupil_func = amp * np.exp(1j*SquarePolynomials.project(pha))
+                    
                         
             err_tot = kernel.compute_error(old_PSI, self.PSI)
             

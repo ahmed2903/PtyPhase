@@ -7,3 +7,6 @@ __pycache__/
 
 # macOS / Linux trash
 .DS_Store
+
+pyxtools.egg-info
+
