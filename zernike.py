@@ -9,8 +9,12 @@ class SquarePolynomials:
     Orthonormal polynomials in wavefront analysis: analytical solution
     J. Opt. Soc. Am. A / Vol. 24, No. 9 / September 2007
     """
+    @classmethod
+    def project_wavefront(cls, wavefront, coords = None):
 
-    def project_wavefront(self, wavefront):
+        if coords is not None:
+            original_shape = wavefront.shape
+            wavefront = wavefront[coords[0]:coords[1], coords[2]:coords[3]]
         
         shape_y, shape_x = wavefront.shape
     
@@ -25,12 +29,70 @@ class SquarePolynomials:
 
         coeffs = extract_square_coefficients_vectorized(wavefront)
         
-        all_results = self.evaluate_all(xdata, coeffs)
-        new_wavefront = sum(all_results.values())
+        all_results = cls.evaluate_all(xdata, coeffs)
+        wavefront = sum(all_results.values())
         
+        if coords is not None:
+            new_wavefront = np.zeros(original_shape, dtype = complex)
+            new_wavefront[coords[0]:coords[1], coords[2]:coords[3]] = wavefront
+            
         return new_wavefront
     
+    @classmethod
+    def get_zernike_wavefront(cls, coefficients, pupil_shape):
+    
+        shape_y, shape_x = pupil_shape
         
+        # Create coordinate grids
+        side_x = np.linspace(-1/np.sqrt(2), 1/np.sqrt(2), shape_x)
+        side_y = np.linspace(-1/np.sqrt(2), 1/np.sqrt(2), shape_y)
+    
+        X, Y = np.meshgrid(side_x, side_y)
+        xdata = [X, Y]
+    
+        all_results = cls.evaluate_all(xdata, coefficients)
+        new_wavefront = sum(all_results.values())
+    
+        return new_wavefront
+
+    @classmethod
+    def extract_square_coefficients_vectorized(cls, phase):
+        """
+        More efficient implementation using least squares directly.
+        """
+        instance = cls()
+        # Create coordinate grids
+        side_x = np.linspace(-1/np.sqrt(2), 1/np.sqrt(2), phase.shape[1])
+        side_y = np.linspace(-1/np.sqrt(2), 1/np.sqrt(2), phase.shape[0])
+    
+        X1, X2 = np.meshgrid(side_x, side_y)
+        
+        # Reshape coordinates - note: different format for direct method calls
+        xdata = [X1, X2]  # This matches the expected format for the polynomial methods
+        
+        # Reshape phase data
+        p_flat = phase.flatten()
+        
+        # Build design matrix
+        function_names = instance.get_function_list()
+        n_terms = len(function_names)
+        n_pixels = len(p_flat)
+        
+        A_matrix = np.zeros((n_pixels, n_terms))
+        
+        print("Building design matrix...")
+        for i in range(n_terms):
+            func_name = function_names[i]
+            # Evaluate polynomial with unit amplitude
+            poly_vals = instance.evaluate(func_name, xdata, A=1.0)
+            A_matrix[:, i] = poly_vals.flatten()
+        print("Done")
+        # Solve using least squares
+        coefficients, residuals, rank, s = np.linalg.lstsq(A_matrix, p_flat, rcond=None)
+        
+        return coefficients.tolist()
+    
+    @classmethod
     def evaluate(self, function_name, xdata, A):
             """
             Evaluate a specific polynomial function by name.
@@ -54,7 +116,9 @@ class SquarePolynomials:
                 return getattr(self, function_name)(xdata, A)
             else:
                 raise ValueError(f"Function {function_name} not found")
-        
+
+
+    @classmethod
     def evaluate_all(self, xdata, A_values):
         """
         Evaluate all polynomial functions with given amplitude values.
@@ -82,7 +146,8 @@ class SquarePolynomials:
             results[func_name] = getattr(self, func_name)(xdata, A_values[i])
         
         return results
-    
+
+
     def get_function_list(self):
         """Return a list of available polynomial functions."""
         return ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10', 'S11', 'S12', 'S13', 'S14', 'S15', 
@@ -597,41 +662,3 @@ def extract_rectangular_coefficients_vectorized(phase, a=1/np.sqrt(2)):
     return coefficients.tolist()
 
 
-def extract_square_coefficients_vectorized(phase):
-    """
-    More efficient implementation using least squares directly.
-    """
-    
-    # Create the polynomial object
-    square_poly = SquarePolynomials()
-    
-    # Create coordinate grids
-    side_x = np.linspace(-1/np.sqrt(2), 1/np.sqrt(2), phase.shape[1])
-    side_y = np.linspace(-1/np.sqrt(2), 1/np.sqrt(2), phase.shape[0])
-
-    X1, X2 = np.meshgrid(side_x, side_y)
-    
-    # Reshape coordinates - note: different format for direct method calls
-    xdata = [X1, X2]  # This matches the expected format for the polynomial methods
-    
-    # Reshape phase data
-    p_flat = phase.flatten()
-    
-    # Build design matrix
-    function_names = square_poly.get_function_list()
-    n_terms = len(function_names)
-    n_pixels = len(p_flat)
-    
-    A_matrix = np.zeros((n_pixels, n_terms))
-    
-    print("Building design matrix...")
-    for i in range(n_terms):
-        func_name = function_names[i]
-        # Evaluate polynomial with unit amplitude
-        poly_vals = square_poly.evaluate(func_name, xdata, A=1.0)
-        A_matrix[:, i] = poly_vals.flatten()
-    print("Done")
-    # Solve using least squares
-    coefficients, residuals, rank, s = np.linalg.lstsq(A_matrix, p_flat, rcond=None)
-    
-    return coefficients.tolist()

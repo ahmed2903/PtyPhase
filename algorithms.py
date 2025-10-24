@@ -109,7 +109,7 @@ class AlgorithmKernel:
     def _insert_center_to_kvec_location(self, bounds, arr):
         
         (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-        out = np.zeros_like(arr, dtype=arr.dtype)
+        out = np.zeros_like(arr, dtype=complex)
         out[lx:hx, ly:hy] = arr[rl:rh, cl:ch]
         return out
     

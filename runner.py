@@ -4,11 +4,11 @@ from .phase_abstract import Plot, LivePlot, PhaseRetrievalBase
 from .utils_pr import *
 import inspect
 from IPython.display import display, clear_output
-from ZernikePolynomials import SquarePolynomials
+from .ZernikePolynomials import SquarePolynomials
 
 from .algorithms import AlgorithmKernel
 
-class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
+class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -21,8 +21,9 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
         
         
         if live_plot and self.liveplot_init:
-            self._initialize_live_plot()
+            
             self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
+            self._initialize_live_plot()
             self._update_live_plot()
             self.liveplot_init = False
             
@@ -40,6 +41,8 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
                                   n_jobs = self.num_jobs, 
                                    backend = self.backend
                                   )
+
+            print('Step done')
             
             # Update Fourier Spectrum
             self.hr_fourier_image = kernel.update_object_ft(PSI = self.PSI, 
@@ -47,7 +50,7 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
                                                             bounds = self.patch_bounds, 
                                                             n_jobs = self.num_jobs, 
                                                             backend = self.backend)
-            
+            print('Object update done')
             # Update pupil
             if pupil_update_step > 0 and ((self.iters_passed + 1) % pupil_update_step == 0):
                 self.pupil_func = kernel.update_pupil(PSI = self.PSI, 
@@ -59,13 +62,13 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
                                                       backend= self.backend)
 
                 if zernike_projection:
-                    
+                    zernike = SquarePolynomials()
                     pha = np.angle(self.pupil_func)
                     amp = np.abs(self.pupil_func)
+                    self.pupil_func = np.abs(self.ctf) * np.exp(1j*zernike.project_wavefront(pha, coords=self.pupil_coords))
                     
-                    self.pupil_func = amp * np.exp(1j*SquarePolynomials.project(pha))
-                    
-                        
+                print('Pupil update done')
+                
             err_tot = kernel.compute_error(old_PSI, self.PSI)
             
             self.iter_loss = err_tot / max(1, self.num_images)
@@ -116,21 +119,21 @@ class FourierPtychoRunner(PhaseRetrievalBase, Plot, LivePlot):
 
 class Pipeline:
     
-    def __init__(self, runner: FourierPtychoRunner, steps: Sequence[Tuple[AlgorithmKernel, int]]):
+    def __init__(self, engine: FourierPtychoEngine, steps: Sequence[Tuple[AlgorithmKernel, int]]):
         
-        self.runner = runner
+        self.engine = engine
         self.steps = steps
 
     
-    def run(self, live_plot=False, pupil_update_step=1):
+    def run(self, live_plot=False, pupil_update_step=1, zernike_projection = False):
         
         for kernel, n in self.steps:
             
             print(f"Running {kernel.__class__.__name__} for {n} iters")
             
-            self.runner.solve(kernel, iterations=n, pupil_update_step=pupil_update_step, live_plot=live_plot)
+            self.engine.solve(kernel, iterations=n, pupil_update_step=pupil_update_step, zernike_projection=zernike_projection, live_plot=live_plot)
 
-    def cycle(self, total_iterations: int, live_plot=False, pupil_update_step=1):
+    def cycle(self, total_iterations: int, live_plot=False, pupil_update_step=1, zernike_projection=True):
         
         iterations_done = 0
         
@@ -145,7 +148,7 @@ class Pipeline:
                 iter_to_run = min(n, remaining)
                 
                 
-                self.runner.solve(kernel, iterations=n, pupil_update_step=pupil_update_step, live_plot=live_plot)
+                self.engine.solve(kernel, iterations=n, pupil_update_step=pupil_update_step, zernike_projection=zernike_projection, live_plot=live_plot)
                 
                 iterations_done += iter_to_run
 

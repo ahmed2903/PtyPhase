@@ -198,7 +198,7 @@ class PhaseRetrievalBase(ABC):
         elif isinstance(self.pupil_func, np.ndarray):
             phase = self.pupil_func
         else:
-            phase = np.zeros(dims)
+            phase = np.ones(dims, dtype = complex)
         
         # Get the scaling factors for each dimension
         if self.extend == 'double':
@@ -227,6 +227,8 @@ class PhaseRetrievalBase(ABC):
         # Set central region to ones
         full_array[start_x:end_x, start_y:end_y] = scaled_pupil_phase
 
+        self.pupil_coords = (start_x, end_x, start_y, end_y)
+        
         self.ctf[start_x:end_x, start_y:end_y] = 1.0
 
         self.pupil_func = full_array
