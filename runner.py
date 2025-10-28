@@ -4,7 +4,7 @@ from .phase_abstract import Plot, LivePlot, PhaseRetrievalBase
 from .utils_pr import *
 import inspect
 from IPython.display import display, clear_output
-from .ZernikePolynomials import SquarePolynomials
+from .zernike import SquarePolynomials
 
 from .algorithms import AlgorithmKernel
 
@@ -14,9 +14,11 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
 
         self.liveplot_init = True
         
-    def solve(self, kernel: AlgorithmKernel, iterations: int, 
-              pupil_update_step: int = 1, 
-              zernike_projection = False,
+    def solve(self, kernel: AlgorithmKernel, 
+              iterations: int, 
+              object_steps = None,
+              pupil_steps = None, 
+              zernike_steps = None,
               live_plot: bool = False):
         
         
@@ -26,49 +28,91 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             self._initialize_live_plot()
             self._update_live_plot()
             self.liveplot_init = False
-            
+        
         for it in range(iterations):
+
+            
             
             old_PSI = self.PSI.copy()
             
-            
-            # Update PSI for each image
+            # ________ Update PSI ________
             self.PSI = kernel.step(PSI=self.PSI, 
                                   objectFT = self.hr_fourier_image, 
                                   pupil_func = self.pupil_func, 
                                   bounds = self.patch_bounds, 
-                                  images = self.coherent_imgs_upsampled,
+                                  images = self.images,
                                   n_jobs = self.num_jobs, 
                                    backend = self.backend
                                   )
 
             print('Step done')
-            
-            # Update Fourier Spectrum
-            self.hr_fourier_image = kernel.update_object_ft(PSI = self.PSI, 
-                                                            pupil = self.pupil_func, 
-                                                            bounds = self.patch_bounds, 
-                                                            n_jobs = self.num_jobs, 
-                                                            backend = self.backend)
-            print('Object update done')
-            # Update pupil
-            if pupil_update_step > 0 and ((self.iters_passed + 1) % pupil_update_step == 0):
-                self.pupil_func = kernel.update_pupil(PSI = self.PSI, 
-                                                      objectFT = self.hr_fourier_image, 
-                                                      bounds = self.patch_bounds, 
-                                                      pupil_func = self.pupil_func, 
-                                                      ctf = self.ctf,
-                                                      n_jobs = self.num_jobs, 
-                                                      backend= self.backend)
 
-                if zernike_projection:
-                    zernike = SquarePolynomials()
+
+            # ________ Object update ________
+            if object_steps is not None:
+                if (it % (object_steps + pupil_steps)) < object_steps:
+                    self.hr_fourier_image = kernel.update_object_ft(
+                        PSI=self.PSI, 
+                        pupil=self.pupil_func, 
+                        bounds=self.patch_bounds, 
+                        n_jobs=self.num_jobs, 
+                        backend=self.backend
+                    )
+                    print('Object Update')
+        
+                # ________ Pupil update ________
+                else:
+                    self.pupil_func = kernel.update_pupil(
+                        PSI=self.PSI, 
+                        objectFT=self.hr_fourier_image, 
+                        bounds=self.patch_bounds, 
+                        pupil_func=self.pupil_func, 
+                        ctf=self.ctf,
+                        n_jobs=self.num_jobs, 
+                        backend=self.backend
+                    )
+                    
+                    print('Pupil Update')
+                    
+                    if zernike_steps is not None and it % zernike_steps == 0 :
+                        pha = np.angle(self.pupil_func)
+                        amp = np.abs(self.pupil_func)
+                        self.pupil_func = amp * np.exp(
+                            1j * SquarePolynomials.project_wavefront(pha, coords=self.pupil_coords)
+                        )
+                        print("Zernike Update")
+            else: 
+                self.hr_fourier_image = kernel.update_object_ft(
+                        PSI=self.PSI, 
+                        pupil=self.pupil_func, 
+                        bounds=self.patch_bounds, 
+                        n_jobs=self.num_jobs, 
+                        backend=self.backend
+                    )
+                
+                print('Object Update')
+                
+                self.pupil_func = kernel.update_pupil(
+                        PSI=self.PSI, 
+                        objectFT=self.hr_fourier_image, 
+                        bounds=self.patch_bounds, 
+                        pupil_func=self.pupil_func, 
+                        ctf=self.ctf,
+                        n_jobs=self.num_jobs, 
+                        backend=self.backend
+                    )
+                    
+                print('Pupil Update')
+                    
+                if zernike_steps is not None and it % zernike_steps == 0 :
                     pha = np.angle(self.pupil_func)
                     amp = np.abs(self.pupil_func)
-                    self.pupil_func = np.abs(self.ctf) * np.exp(1j*zernike.project_wavefront(pha, coords=self.pupil_coords))
-                    
-                print('Pupil update done')
-                
+                    self.pupil_func = amp * np.exp(
+                        1j * SquarePolynomials.project_wavefront(pha, coords=self.pupil_coords)
+                    )
+                    print("Zernike Update")
+                        
+            # ________ Error ________
             err_tot = kernel.compute_error(old_PSI, self.PSI)
             
             self.iter_loss = err_tot / max(1, self.num_images)
@@ -125,15 +169,15 @@ class Pipeline:
         self.steps = steps
 
     
-    def run(self, live_plot=False, pupil_update_step=1, zernike_projection = False):
+    def run(self, live_plot=False, pupil_steps=None, object_steps=None, zernike_steps = None):
         
         for kernel, n in self.steps:
             
             print(f"Running {kernel.__class__.__name__} for {n} iters")
-            
-            self.engine.solve(kernel, iterations=n, pupil_update_step=pupil_update_step, zernike_projection=zernike_projection, live_plot=live_plot)
+            self.engine.solve(kernel, iterations=n, object_steps=object_steps, pupil_steps=pupil_steps, 
+                              zernike_steps=zernike_steps, live_plot=live_plot)
 
-    def cycle(self, total_iterations: int, live_plot=False, pupil_update_step=1, zernike_projection=True):
+    def cycle(self, total_iterations: int, live_plot=False, pupil_steps=1, object_steps=2, zernike_steps=5):
         
         iterations_done = 0
         
@@ -148,7 +192,8 @@ class Pipeline:
                 iter_to_run = min(n, remaining)
                 
                 
-                self.engine.solve(kernel, iterations=n, pupil_update_step=pupil_update_step, zernike_projection=zernike_projection, live_plot=live_plot)
+                self.engine.solve(kernel, iterations=n, object_steps=object_steps, pupil_steps=pupil_steps, 
+                                  zernike_steps=zernike_steps, live_plot=live_plot)
                 
                 iterations_done += iter_to_run
 

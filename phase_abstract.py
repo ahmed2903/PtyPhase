@@ -67,7 +67,7 @@ class PhaseRetrievalBase(ABC):
         
         self.pupil_shape = self.pupil_func.shape
         
-        self.upsample_coherent_images()
+        # self.upsample_coherent_images()
         
         self._initiate_recons_images()
 
@@ -75,19 +75,37 @@ class PhaseRetrievalBase(ABC):
         
         self.PSI = self.get_psi()
     
+    # def _extract_patch_to_center(self, bounds, arr):
+        
+    #     (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
+    #     out = np.zeros_like(self.pupil_func, dtype=complex)
+        
+    #     out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
+        
+    #     return out
+
+    def _insert_center_to_kvec_location(self, bounds, arr):
+        
+        (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
+        # out = np.zeros_like(arr)
+        # out[lx:hx, ly:hy] = arr[rl:rh, cl:ch]
+        out = arr[rl:rh, cl:ch]
+        return out
+    
     def _extract_patch_to_center(self, bounds, arr):
         
         (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-        out = np.zeros_like(self.pupil_func, dtype=complex)
-        
-        out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
-        
+        #out = np.zeros_like(arr)
+        #out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
+        out = arr[lx:hx, ly:hy]
         return out
     
     def _compute_single_exit(self, bounds, pupil, objectFT):
         """Compute exit wave for a single k-vector"""
         
         this_pupil = self._extract_patch_to_center(bounds, pupil)
+        # print(this_pupil.shape)
+        # print(objectFT.shape)
         psi = this_pupil * objectFT
         
         return psi
@@ -110,8 +128,8 @@ class PhaseRetrievalBase(ABC):
         
         kx_iter, ky_iter = kout[:2]
         
-        kx_cidx = round((kx_iter - self.kx_min_n) / self.dkx)
-        ky_cidx = round((ky_iter - self.ky_min_n) / self.dky)
+        kx_cidx = (kx_iter - self.kx_min_n) / self.dkx
+        ky_cidx = (ky_iter - self.ky_min_n) / self.dky
 
         lx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx), 0))
         hx = round(kx_cidx + self.omega_obj_x / (2 * self.dkx)) + (1 if self.nx_lr % 2 != 0 else 0)
@@ -119,10 +137,10 @@ class PhaseRetrievalBase(ABC):
         ly = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
         hy = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
         
-        rl = self.pupil_shape [0]//2 - self.img_shape[0]//2
-        rh = self.pupil_shape [0]//2 + self.img_shape[0]//2
-        cl = self.pupil_shape [1]//2 - self.img_shape[1]//2
-        ch =  self.pupil_shape [1]//2 + self.img_shape[1]//2
+        rl = self.pupil_shape[0]//2 - self.img_shape[0]//2
+        rh = self.pupil_shape[0]//2 + self.img_shape[0]//2
+        cl = self.pupil_shape[1]//2 - self.img_shape[1]//2
+        ch =  self.pupil_shape[1]//2 + self.img_shape[1]//2
 
         return (lx, hx, ly, hy), (rl, rh, cl, ch)
     
@@ -166,16 +184,16 @@ class PhaseRetrievalBase(ABC):
             
             self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
             self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
-            self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
-            self.hr_obj_image = pad_to_shape(self.hr_obj_image, self.pupil_func.shape)
+            #self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
+            #self.hr_obj_image = pad_to_shape(self.hr_obj_image, self.pupil_func.shape)
         
         elif self.hr_fourier_image is None:
             self.hr_fourier_image = self.forward_fft(self.hr_obj_image)
-            self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
-            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
+            #self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
+            #self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
             
         elif self.hr_obj_image is None:
-            self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
+            #self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
             self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
             
             
@@ -234,7 +252,7 @@ class PhaseRetrievalBase(ABC):
         self.pupil_func = full_array
         # self.pupil_func = amp_array * np.exp(1j*full_array)
     
-    def save_reconsturction(self, file_path):
+    def save_reconsturction(self, file_path, metadata = {}):
         """
         Save the reconstruction data and metadata to an HDF5 file.
     
@@ -242,11 +260,9 @@ class PhaseRetrievalBase(ABC):
             file_path (str): The path where the HDF5 file will be saved.
         """
         # Prepare metadata
-        metadata = {
-        "Num_iters": self.iters_passed,
-        "pupil_dims" : self.pupil_func.shape,
-        }
-
+        metadata["Num_iters"] = self.iters_passed
+        metadata["pupil_dims"] = self.pupil_func.shape
+        
         with h5py.File(file_path, "w") as h5f:
             # Save metadata as attributes in the root group
             recon_params = h5f.create_group("Recon_Params")

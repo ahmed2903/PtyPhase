@@ -44,23 +44,24 @@ class AlgorithmKernel:
         denom = np.sum(denom_contribs, axis=0)
         numer = np.sum(numer_contribs, axis=0)
         
-        objectFT_update = numer / (denom + 1e-15)
+        objectFT_update = numer / (denom + 1e-8)
         
         return objectFT_update
     
     ############# Pupil Update ###############
     
-    def _process_single_pupil_update(self, bounds, objectFT, psi):
+    def _process_single_pupil_update(self, bounds, objectFT, psi, pupil_shape):
         """Process a single k_s iteration for pupil update"""
     
         
-        this_objectFT = self._insert_center_to_kvec_location(bounds, objectFT)
-        
+        this_objectFT = self._insert_center_to_kvec_location(bounds, objectFT, pupil_shape)
+        # this_objectFT = objectFT
         denom_contrib = np.abs(this_objectFT)**2
         
-        this_PSI = self._insert_center_to_kvec_location(bounds, psi)
+        this_PSI = self._insert_center_to_kvec_location(bounds, psi, pupil_shape)
+        # this_PSI = psi
         
-        numer_contrib = np.conjugate(this_objectFT) * this_PSI
+        numer_contrib = np.conjugate(this_objectFT) * this_PSI 
         
         return denom_contrib, numer_contrib
     
@@ -68,9 +69,10 @@ class AlgorithmKernel:
         '''
         Updating the pupil function
         '''        
+        pupil_shape = pupil_func.shape
         results = Parallel(n_jobs=n_jobs, backend = backend)(
             delayed(self._process_single_pupil_update)(
-                k_vector, objectFT, psi_i
+                k_vector, objectFT, psi_i, pupil_shape
             )
             for k_vector, psi_i in zip(bounds, PSI)
         )
@@ -82,11 +84,14 @@ class AlgorithmKernel:
         denom = np.sum(denom_contribs, axis=0)
         numer = np.sum(numer_contribs, axis=0)
         
-        pupil_func_update = numer / (denom + 1e-15)
+        pupil_func_update = numer / (denom + 1e-8)
 
         # pupil_func_update = (1 - beta) * pupil_func + beta * pupil_func_update
-                
-        pupil_func_update *= np.abs(ctf)
+
+        pha = np.angle(pupil_func_update) * np.abs(ctf)
+        amp = np.abs(pupil_func_update) * np.abs(ctf)
+        
+        pupil_func_update = amp * np.exp(1j*pha) 
         
         return pupil_func_update
     
@@ -106,18 +111,20 @@ class AlgorithmKernel:
     
     ########## Helpers ##############
 
-    def _insert_center_to_kvec_location(self, bounds, arr):
+    def _insert_center_to_kvec_location(self, bounds, arr, pupil_shape):
         
         (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-        out = np.zeros_like(arr, dtype=complex)
-        out[lx:hx, ly:hy] = arr[rl:rh, cl:ch]
+        out = np.zeros(pupil_shape, dtype = complex)
+        out[lx:hx, ly:hy] = arr
+        # out = arr[rl:rh, cl:ch]
         return out
     
     def _extract_patch_to_center(self, bounds, arr):
         
         (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-        out = np.zeros_like(arr, dtype=complex)
-        out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
+        #out = np.zeros_like(arr)
+        #out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
+        out = arr[lx:hx, ly:hy]
         return out
    
     def _compute_single_exit(self, bounds, pupil, objectFT):
@@ -161,6 +168,8 @@ class DM(AlgorithmKernel):
         
         return Psi_n
 
+
+
 class RAAR(AlgorithmKernel):
     
     def __init__(self, beta = 0.9, beta_decay = None):
@@ -199,6 +208,8 @@ class AAR(AlgorithmKernel):
         Psi_n = 0.5 * (PSI + Psi_data_reflection)
 
         return Psi_n
+
+
 
 
 class HPR(AlgorithmKernel):

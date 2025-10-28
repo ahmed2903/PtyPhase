@@ -27,7 +27,7 @@ class SquarePolynomials:
         X, Y = np.meshgrid(side_x, side_y)
         xdata = [X, Y]
 
-        coeffs = extract_square_coefficients_vectorized(wavefront)
+        coeffs = cls.extract_square_coefficients_vectorized(wavefront)
         
         all_results = cls.evaluate_all(xdata, coeffs)
         wavefront = sum(all_results.values())
