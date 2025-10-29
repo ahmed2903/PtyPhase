@@ -123,7 +123,10 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             if live_plot:
                 self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
                 self._update_live_plot()
-    
+
+    def _post_process(self):
+        
+        self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
     def get_state(self):
         return dict(
         objectFT=self.hr_fourier_image,
