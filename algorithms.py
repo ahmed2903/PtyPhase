@@ -19,9 +19,9 @@ class AlgorithmKernel:
     
     ####### Object Updates ###########
     
-    def _update_object_patch(self, bounds, pupil_func, psi):
+    def _update_object_patch(self, slices, pupil_func, psi):
                 
-        this_pupil = self._extract_patch_to_center(bounds, pupil_func)
+        this_pupil = self._extract_patch_to_center(slices, pupil_func)
         
         denom_contrib = np.abs(this_pupil)**2
         
@@ -30,23 +30,38 @@ class AlgorithmKernel:
         return denom_contrib, numer_contrib
     
     
-    def update_object_ft(self, PSI: np.ndarray, pupil: np.ndarray, bounds: np.ndarray, n_jobs, backend):
+    # def update_object_ft(self, PSI: np.ndarray, pupil: np.ndarray, bounds: np.ndarray, n_jobs, backend):
 
-        results = Parallel(n_jobs=n_jobs, backend = backend)(
-            delayed(self._update_object_patch)(bound, pupil, psi_i)
-            for bound, psi_i in zip(bounds, PSI)
-        )
+    #     results = Parallel(n_jobs=n_jobs, backend = backend)(
+    #         delayed(self._update_object_patch)(bound, pupil, psi_i)
+    #         for bound, psi_i in zip(bounds, PSI)
+    #     )
         
-        denom_contribs = [r[0] for r in results]
-        numer_contribs = [r[1] for r in results]
+    #     denom_contribs = [r[0] for r in results]
+    #     numer_contribs = [r[1] for r in results]
         
-        # Sum contributions
-        denom = np.sum(denom_contribs, axis=0)
-        numer = np.sum(numer_contribs, axis=0)
+    #     # Sum contributions
+    #     denom = np.sum(denom_contribs, axis=0)
+    #     numer = np.sum(numer_contribs, axis=0)
         
-        objectFT_update = numer / (denom + 1e-8)
+    #     objectFT_update = numer / (denom + 1e-8)
         
-        return objectFT_update
+    #     return objectFT_update
+
+    def update_object_ft(self, PSI, pupil, slices):
+        """
+        Vectorized object update with precomputed slices.
+        """
+        patch_shape = PSI[0].shape
+        denom = np.zeros(patch_shape, dtype=np.float64)
+        numer = np.zeros(patch_shape, dtype=np.complex128)
+    
+        for sl, psi_i in zip(slices, PSI):
+            pupil_patch = pupil[sl]
+            denom += np.abs(pupil_patch)**2
+            numer += np.conjugate(pupil_patch) * psi_i
+    
+        return numer / (denom + 1e-8)
     
     ############# Pupil Update ###############
     
@@ -95,25 +110,23 @@ class AlgorithmKernel:
         
     #     return pupil_func_update
 
-    def update_pupil(self, PSI, objectFT, bounds, pupil_func, ctf):
-        """
-        Vectorized pupil update: no Python loops, no joblib.
-        """
+    def update_pupil(self, PSI, objectFT, slices, pupil_func, ctf):
+        
         pupil_shape = pupil_func.shape
         denom = np.zeros(pupil_shape, dtype=np.float64)
         numer = np.zeros(pupil_shape, dtype=np.complex128)
     
         # Pre-allocate output buffers
-        for bd, psi_i in zip(bounds, PSI):
-            (lx, hx, ly, hy), (rl, rh, cl, ch) = bd
+        for sl, psi_i in zip(slices, PSI):
+            # (lx, hx, ly, hy), (rl, rh, cl, ch) = bd
             this_objectFT = np.zeros(pupil_shape, dtype=np.complex128)
             this_PSI = np.zeros(pupil_shape, dtype=np.complex128)
             
-            this_objectFT[lx:hx, ly:hy] = objectFT
-            this_PSI[lx:hx, ly:hy] = psi_i
+            this_objectFT[sl] = objectFT
+            this_PSI[sl] = psi_i
     
-            denom[lx:hx, ly:hy] += np.abs(this_objectFT[lx:hx, ly:hy])**2
-            numer[lx:hx, ly:hy] += np.conjugate(this_objectFT[lx:hx, ly:hy]) * this_PSI[lx:hx, ly:hy] #* np.abs(ctf[lx:hx, ly:hy])
+            denom[sl] += np.abs(this_objectFT[sl])**2
+            numer[sl] += np.conjugate(this_objectFT[sl]) * this_PSI[sl] #* np.abs(ctf[lx:hx, ly:hy])
             
         pupil_func_update = numer / (denom + 1e-8)
         # pha = np.angle(pupil_func_update) * np.abs(ctf)
@@ -145,31 +158,31 @@ class AlgorithmKernel:
         # out = arr[rl:rh, cl:ch]
         return out
     
-    def _extract_patch_to_center(self, bounds, arr):
+    def _extract_patch_to_center(self, sl, arr):
         
-        (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
+        # (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
         #out = np.zeros_like(arr)
         #out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
-        out = arr[lx:hx, ly:hy]
+        out = arr[sl]
         return out
    
-    def _compute_single_exit(self, bounds, pupil, objectFT):
+    def _compute_single_exit(self, sl, pupil, objectFT):
         """Compute exit wave for a single k-vector"""
         
-        this_pupil = self._extract_patch_to_center(bounds, pupil)
+        this_pupil = self._extract_patch_to_center(sl, pupil)
         psi = this_pupil * objectFT
         
         return psi
 
-    def project_model(self, bounds, pupil, objectFT, n_jobs, backened):
+    def project_model(self, slices, pupil, objectFT, n_jobs, backened):
         '''
         exit initialization where the pupil function and the object spectrum
         are at the centre
         '''
         
         exit_FT_centred = Parallel(n_jobs=n_jobs, backend = backened)(
-            delayed(self._compute_single_exit)(bound, pupil, objectFT)
-            for bound in bounds
+            delayed(self._compute_single_exit)(sl, pupil, objectFT)
+            for sl in slices
         )
         
         return np.array(exit_FT_centred)
@@ -205,11 +218,11 @@ class RAAR(AlgorithmKernel):
         self.beta_decay = beta_decay
         
     
-    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
 
 
          
-        Psi_reflection_model = 2*self.project_model(bounds, pupil_func, objectFT, n_jobs, backend) - PSI
+        Psi_reflection_model = 2*self.project_model(slices, pupil_func, objectFT, n_jobs, backend) - PSI
         
         Psi_project_model = self.project_data(images, Psi_reflection_model)
         
@@ -225,9 +238,9 @@ class RAAR(AlgorithmKernel):
 
 class AAR(AlgorithmKernel):
     
-    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
         
-        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
+        Psi_model = self.project_model(slices, pupil_func, objectFT, n_jobs, backend)
 
         Psi_data_reflection = self.project_data(images, 2*Psi_model - PSI)
 
@@ -242,8 +255,8 @@ class HPR(AlgorithmKernel):
     def __init__(self, beta = 0.9):
 
         self.beta = beta
-    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
-        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
+    def step(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        Psi_model = self.project_model(slices, pupil_func, objectFT, n_jobs, backend)
 
         Psi_data_reflection = self.project_data(images, 2*Psi_model - PSI)
 
@@ -257,8 +270,8 @@ class DM_PIE(AlgorithmKernel):
 
         self.alpha = alpha
 
-    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
-        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
+    def step(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        Psi_model = self.project_model(slices, pupil_func, objectFT, n_jobs, backend)
 
         Psi_reflection = (1 + self.alpha) * Psi_model - self.alpha * PSI
 
@@ -273,9 +286,9 @@ class ePIE(AlgorithmKernel):
 
         self.alpha_obj = alpha_obj
 
-    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
         
-        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
+        Psi_model = self.project_model(slices, pupil_func, objectFT, n_jobs, backend)
 
         Psi_data = self.project_data(images, Psi_model)
 

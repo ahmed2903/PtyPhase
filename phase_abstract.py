@@ -153,7 +153,8 @@ class PhaseRetrievalBase(ABC):
                 kout)
             
             self.patch_bounds.append(((lx, hx, ly, hy), (rl, rh, cl, ch)))
-        
+
+        self.pupil_slices = [(slice(lx, hx), slice(ly, hy)) for (lx, hx, ly, hy), _ in self.patch_bounds]
         
     def _upsample_coh_img(self, image, shape):
         
