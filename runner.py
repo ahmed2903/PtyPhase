@@ -68,8 +68,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                         bounds=self.patch_bounds, 
                         pupil_func=self.pupil_func, 
                         ctf=self.ctf,
-                        n_jobs=self.num_jobs, 
-                        backend=self.backend
+                        #n_jobs=self.num_jobs, 
+                        #backend=self.backend
                     )
                     
                     print('Pupil Update')
@@ -98,8 +98,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                         bounds=self.patch_bounds, 
                         pupil_func=self.pupil_func, 
                         ctf=self.ctf,
-                        n_jobs=self.num_jobs, 
-                        backend=self.backend
+                        # n_jobs=self.num_jobs, 
+                        # backend=self.backend
                     )
                     
                 print('Pupil Update')
@@ -180,7 +180,7 @@ class Pipeline:
             self.engine.solve(kernel, iterations=n, object_steps=object_steps, pupil_steps=pupil_steps, 
                               zernike_steps=zernike_steps, live_plot=live_plot)
 
-    def cycle(self, total_iterations: int, live_plot=False, pupil_steps=1, object_steps=2, zernike_steps=5):
+    def cycle(self, total_iterations: int, live_plot=False, pupil_steps=None, object_steps=None, zernike_steps=None):
         
         iterations_done = 0
         

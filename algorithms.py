@@ -65,35 +65,61 @@ class AlgorithmKernel:
         
         return denom_contrib, numer_contrib
     
-    def update_pupil(self, PSI, objectFT, bounds, pupil_func, ctf, beta = 0.9, n_jobs=1, backend='threading'):
-        '''
-        Updating the pupil function
-        '''        
+    # def update_pupil(self, PSI, objectFT, bounds, pupil_func, ctf, beta = 0.9, n_jobs=1, backend='threading'):
+    #     '''
+    #     Updating the pupil function
+    #     '''        
+    #     pupil_shape = pupil_func.shape
+    #     results = Parallel(n_jobs=n_jobs, backend = backend)(
+    #         delayed(self._process_single_pupil_update)(
+    #             k_vector, objectFT, psi_i, pupil_shape
+    #         )
+    #         for k_vector, psi_i in zip(bounds, PSI)
+    #     )
+        
+    #     denom_contribs = np.array([r[0] for r in results])
+    #     numer_contribs = np.array([r[1] for r in results])
+        
+    #     # Sum contributions
+    #     denom = np.sum(denom_contribs, axis=0)
+    #     numer = np.sum(numer_contribs, axis=0)
+        
+    #     pupil_func_update = numer / (denom + 1e-8)
+
+    #     # pupil_func_update = (1 - beta) * pupil_func + beta * pupil_func_update
+
+    #     pha = np.angle(pupil_func_update) * np.abs(ctf)
+    #     amp = np.abs(pupil_func_update) * np.abs(ctf)
+        
+    #     pupil_func_update = amp * np.exp(1j*pha) 
+        
+    #     return pupil_func_update
+
+    def update_pupil(self, PSI, objectFT, bounds, pupil_func, ctf):
+        """
+        Vectorized pupil update: no Python loops, no joblib.
+        """
         pupil_shape = pupil_func.shape
-        results = Parallel(n_jobs=n_jobs, backend = backend)(
-            delayed(self._process_single_pupil_update)(
-                k_vector, objectFT, psi_i, pupil_shape
-            )
-            for k_vector, psi_i in zip(bounds, PSI)
-        )
-        
-        denom_contribs = np.array([r[0] for r in results])
-        numer_contribs = np.array([r[1] for r in results])
-        
-        # Sum contributions
-        denom = np.sum(denom_contribs, axis=0)
-        numer = np.sum(numer_contribs, axis=0)
-        
+        denom = np.zeros(pupil_shape, dtype=np.float64)
+        numer = np.zeros(pupil_shape, dtype=np.complex128)
+    
+        # Pre-allocate output buffers
+        for bd, psi_i in zip(bounds, PSI):
+            (lx, hx, ly, hy), (rl, rh, cl, ch) = bd
+            this_objectFT = np.zeros(pupil_shape, dtype=np.complex128)
+            this_PSI = np.zeros(pupil_shape, dtype=np.complex128)
+            
+            this_objectFT[lx:hx, ly:hy] = objectFT
+            this_PSI[lx:hx, ly:hy] = psi_i
+    
+            denom[lx:hx, ly:hy] += np.abs(this_objectFT[lx:hx, ly:hy])**2
+            numer[lx:hx, ly:hy] += np.conjugate(this_objectFT[lx:hx, ly:hy]) * this_PSI[lx:hx, ly:hy] #* np.abs(ctf[lx:hx, ly:hy])
+            
         pupil_func_update = numer / (denom + 1e-8)
+        # pha = np.angle(pupil_func_update) * np.abs(ctf)
+        # amp = np.abs(pupil_func_update) * np.abs(ctf)
+        return pupil_func_update #amp * np.exp(1j * pha)
 
-        # pupil_func_update = (1 - beta) * pupil_func + beta * pupil_func_update
-
-        pha = np.angle(pupil_func_update) * np.abs(ctf)
-        amp = np.abs(pupil_func_update) * np.abs(ctf)
-        
-        pupil_func_update = amp * np.exp(1j*pha) 
-        
-        return pupil_func_update
     
     ######## project data #########
     
