@@ -84,26 +84,26 @@ class PhaseRetrievalBase(ABC):
         
     #     return out
 
-    def _insert_center_to_kvec_location(self, bounds, arr):
+    def _insert_center_to_kvec_location(self, sl, arr):
         
-        (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
+        # (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
         # out = np.zeros_like(arr)
         # out[lx:hx, ly:hy] = arr[rl:rh, cl:ch]
-        out = arr[rl:rh, cl:ch]
+        out = arr[sl]
         return out
     
-    def _extract_patch_to_center(self, bounds, arr):
+    def _extract_patch_to_center(self, sl, arr):
         
-        (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
+        # (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
         #out = np.zeros_like(arr)
         #out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
-        out = arr[lx:hx, ly:hy]
+        out = arr[sl]
         return out
     
-    def _compute_single_exit(self, bounds, pupil, objectFT):
+    def _compute_single_exit(self, slices, pupil, objectFT):
         """Compute exit wave for a single k-vector"""
         
-        this_pupil = self._extract_patch_to_center(bounds, pupil)
+        this_pupil = self._extract_patch_to_center(slices, pupil)
         # print(this_pupil.shape)
         # print(objectFT.shape)
         psi = this_pupil * objectFT
@@ -118,8 +118,8 @@ class PhaseRetrievalBase(ABC):
         '''
         
         exit_FT_centred = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
-            delayed(self._compute_single_exit)(bound, self.pupil_func, self.hr_fourier_image)
-            for bound in self.patch_bounds
+            delayed(self._compute_single_exit)(sl, self.pupil_func, self.hr_fourier_image)
+            for sl in self.pupil_slices
         )
         
         return np.array(exit_FT_centred)
