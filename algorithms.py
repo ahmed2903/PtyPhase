@@ -14,44 +14,33 @@ class AlgorithmKernel:
     Kernels should be stateless (store only hyperparameters).
     """
     
-    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):    
+    def step_single(self, slices, objectFT, PSI, images, n_jobs, backend):    
         raise NotImplementedError
     
-    ####### Object Updates ###########
     
-    def _update_object_patch(self, slices, pupil_func, psi):
-                
-        this_pupil = self._extract_patch_to_center(slices, pupil_func)
+    def step(self, slices_list, objectFT_list, PSI_list, images_list, pupil_func, n_jobs, backend):    
         
-        denom_contrib = np.abs(this_pupil)**2
+        n_streaks = len(slices_list)
         
-        numer_contrib = np.conjugate(this_pupil) * psi
+        assert(len(objectFT_list) == len(PSI_list) == len(images_list) == n_streaks, 
+               "slices_list, objectFT_list, PSI_list and images_list must have the same length (one per streak)")
         
-        return denom_contrib, numer_contrib
-    
-    
-    # def update_object_ft(self, PSI: np.ndarray, pupil: np.ndarray, bounds: np.ndarray, n_jobs, backend):
+        assert(type(objectFT_list) == type(PSI_list) == type(images_list) == type(slices_list) == list, 
+               "slices_list, objectFT_list, PSI_list and images_list must have the same type (list)")
+        
+        Psi_updated_list = Parallel(n_jobs=n_jobs, backend=backend)(
+            delayed(self.step_single)(slices, objFT, pupil_func, psi, img, 1, 'threading')
+            for slices, objFT, psi, img in zip(slices_list, objectFT_list, PSI_list, images_list)
+        )
 
-    #     results = Parallel(n_jobs=n_jobs, backend = backend)(
-    #         delayed(self._update_object_patch)(bound, pupil, psi_i)
-    #         for bound, psi_i in zip(bounds, PSI)
-    #     )
+        return Psi_updated_list
+
         
-    #     denom_contribs = [r[0] for r in results]
-    #     numer_contribs = [r[1] for r in results]
-        
-    #     # Sum contributions
-    #     denom = np.sum(denom_contribs, axis=0)
-    #     numer = np.sum(numer_contribs, axis=0)
-        
-    #     objectFT_update = numer / (denom + 1e-8)
-        
-    #     return objectFT_update
+    ####### Object Updates ###########
+
 
     def update_object_ft(self, PSI, pupil, slices):
-        """
-        Vectorized object update with precomputed slices.
-        """
+
         patch_shape = PSI[0].shape
         denom = np.zeros(patch_shape, dtype=np.float64)
         numer = np.zeros(patch_shape, dtype=np.complex128)
@@ -60,55 +49,46 @@ class AlgorithmKernel:
             pupil_patch = pupil[sl]
             denom += np.abs(pupil_patch)**2
             numer += np.conjugate(pupil_patch) * psi_i
-    
+        
         return numer / (denom + 1e-8)
-    
+
+    def update_object_ft_multi(self, PSI_list, pupil, slices_list):
+
+        objectFT_updates = []
+        
+        for PSI, slices in zip(PSI_list, slices_list):
+
+            objectFT_updates.append(self.update_object_ft(PSI, pupil, slices) )
+                        
+        return objectFT_updates
+        
     ############# Pupil Update ###############
     
-    def _process_single_pupil_update(self, bounds, objectFT, psi, pupil_shape):
-        """Process a single k_s iteration for pupil update"""
-    
-        
-        this_objectFT = self._insert_center_to_kvec_location(bounds, objectFT, pupil_shape)
-        # this_objectFT = objectFT
-        denom_contrib = np.abs(this_objectFT)**2
-        
-        this_PSI = self._insert_center_to_kvec_location(bounds, psi, pupil_shape)
-        # this_PSI = psi
-        
-        numer_contrib = np.conjugate(this_objectFT) * this_PSI 
-        
-        return denom_contrib, numer_contrib
-    
-    # def update_pupil(self, PSI, objectFT, bounds, pupil_func, ctf, beta = 0.9, n_jobs=1, backend='threading'):
-    #     '''
-    #     Updating the pupil function
-    #     '''        
-    #     pupil_shape = pupil_func.shape
-    #     results = Parallel(n_jobs=n_jobs, backend = backend)(
-    #         delayed(self._process_single_pupil_update)(
-    #             k_vector, objectFT, psi_i, pupil_shape
-    #         )
-    #         for k_vector, psi_i in zip(bounds, PSI)
-    #     )
-        
-    #     denom_contribs = np.array([r[0] for r in results])
-    #     numer_contribs = np.array([r[1] for r in results])
-        
-    #     # Sum contributions
-    #     denom = np.sum(denom_contribs, axis=0)
-    #     numer = np.sum(numer_contribs, axis=0)
-        
-    #     pupil_func_update = numer / (denom + 1e-8)
+    def update_pupil_multi(self, PSI_list, objectFT_list, slices_list, pupil_func, ctf):
+        """Shared pupil update across all streaks."""
+        pupil_shape = pupil_func.shape
+        denom = np.zeros(pupil_shape, dtype=np.float64)
+        numer = np.zeros(pupil_shape, dtype=np.complex128)
 
-    #     # pupil_func_update = (1 - beta) * pupil_func + beta * pupil_func_update
+        for PSI, objectFT, slices in zip(PSI_list, objectFT_list, slices_list):
+            
+            for sl, psi_i in zip(slices, PSI):
+                
+                tmp_obj = np.zeros(pupil_shape, dtype=np.complex128)
+                tmp_psi = np.zeros(pupil_shape, dtype=np.complex128)
+                
+                # tmp_obj[sl] = objectFT
+                # tmp_psi[sl] = psi_i
 
-    #     pha = np.angle(pupil_func_update) * np.abs(ctf)
-    #     amp = np.abs(pupil_func_update) * np.abs(ctf)
+                denom[sl] += np.abs(objectFT)**2
+                numer[sl] += np.conjugate(objectFT) * psi_i
         
-    #     pupil_func_update = amp * np.exp(1j*pha) 
+        pupil_func_update = numer / (denom + 1e-8)
+
+        pha = np.angle(pupil_func_update) * np.abs(ctf)
+        amp = np.abs(pupil_func_update) * np.abs(ctf)
         
-    #     return pupil_func_update
+        return  amp * np.exp(1j * pha) # pupil_func_update 
 
     def update_pupil(self, PSI, objectFT, slices, pupil_func, ctf):
         
@@ -129,10 +109,10 @@ class AlgorithmKernel:
             numer[sl] += np.conjugate(this_objectFT[sl]) * this_PSI[sl] #* np.abs(ctf[lx:hx, ly:hy])
             
         pupil_func_update = numer / (denom + 1e-8)
-        # pha = np.angle(pupil_func_update) * np.abs(ctf)
-        # amp = np.abs(pupil_func_update) * np.abs(ctf)
-        return pupil_func_update #amp * np.exp(1j * pha)
-
+        pha = np.angle(pupil_func_update) * np.abs(ctf)
+        amp = np.abs(pupil_func_update) * np.abs(ctf)
+        return amp * np.exp(1j * pha) #pupil_func_update #
+        
     
     ######## project data #########
     
@@ -150,62 +130,74 @@ class AlgorithmKernel:
     
     ########## Helpers ##############
 
-    def _insert_center_to_kvec_location(self, bounds, arr, pupil_shape):
-        
-        (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-        out = np.zeros(pupil_shape, dtype = complex)
-        out[lx:hx, ly:hy] = arr
-        # out = arr[rl:rh, cl:ch]
-        return out
-    
-    def _extract_patch_to_center(self, sl, arr):
-        
-        # (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-        #out = np.zeros_like(arr)
-        #out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
-        out = arr[sl]
-        return out
    
     def _compute_single_exit(self, sl, pupil, objectFT):
         """Compute exit wave for a single k-vector"""
         
-        this_pupil = self._extract_patch_to_center(sl, pupil)
+        this_pupil = pupil[sl] 
         psi = this_pupil * objectFT
         
         return psi
 
-    def project_model(self, slices, pupil, objectFT, n_jobs, backened):
+    def project_model(self, slices, pupil, objectFT):
         '''
         exit initialization where the pupil function and the object spectrum
         are at the centre
         '''
+
+        Psi_model = [self._compute_single_exit(sl, pupil, objectFT) for sl in slices]
         
-        exit_FT_centred = Parallel(n_jobs=n_jobs, backend = backened)(
-            delayed(self._compute_single_exit)(sl, pupil, objectFT)
-            for sl in slices
-        )
-        
-        return np.array(exit_FT_centred)
+        return np.stack(Psi_model, axis=0)
+
     
-    def compute_error(self, old_psi, new_psi):
+    # def project_model(self, slices_list, pupil, objectFT_list, n_jobs, backend):
+    #     print(type(slices_list))
+    #     print(type(objectFT_list))
+    #     print(pupil.shape)
         
-        err = np.linalg.norm(new_psi - old_psi) 
-        return err
+    #     Psi_all = Parallel(n_jobs=n_jobs, backend=backend)(
+    #         delayed(self.project_model_single)(slices, pupil, obj)
+    #         for slices, obj in zip(slices_list, objectFT_list)
+    #     )
+        
+    #     return Psi_all
     
 
-class DM(AlgorithmKernel):
-    
-    def step(self, bounds, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def compute_error(self, old_psi_list, new_psi_list):
+
+        errors = []
         
-        Psi_model = self.project_model(bounds, pupil_func, objectFT, n_jobs, backend)
+        for old_psi, new_psi in zip(old_psi_list, new_psi_list):
+            err = np.sum(np.linalg.norm(new_psi - old_psi)**2) #/ np.linalg.norm(old_psi)
+            errors.append(err)
+            
+        total_error = np.mean(errors)
+        
+        return total_error, errors
+
+
+class DM(AlgorithmKernel):
+    def __init__(self, beta = 1.0, beta_decay = None):
+
+        self.beta = beta
+
+        self.beta_decay = beta_decay
+        
+    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        
+        Psi_model = self.project_model(slices, pupil_func, objectFT)
         
         Psi_reflection = 2 * Psi_model - PSI
         
         Psi_data_reflection = self.project_data(images, Psi_reflection)
 
-        Psi_n = PSI + Psi_data_reflection - Psi_model
-        
+        Psi_n = PSI + self.beta * (Psi_data_reflection - Psi_model)
+        if self.beta_decay is not None:
+            self.beta *= self.beta_decay
         return Psi_n
+
+
+        
 
 
 
@@ -218,19 +210,17 @@ class RAAR(AlgorithmKernel):
         self.beta_decay = beta_decay
         
     
-    def step(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
 
 
          
-        Psi_reflection_model = 2*self.project_model(slices, pupil_func, objectFT, n_jobs, backend) - PSI
+        Psi_reflection_model = 2*self.project_model(slices, pupil_func, objectFT) - PSI
         
         Psi_project_model = self.project_data(images, Psi_reflection_model)
-        
 
         Psi_n = self.beta * Psi_project_model + (1-self.beta) * PSI
 
-        if self.beta_decay is not None:
-            self.beta *= self.beta_decay
+        
             
         return Psi_n
     
@@ -238,9 +228,9 @@ class RAAR(AlgorithmKernel):
 
 class AAR(AlgorithmKernel):
     
-    def step(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
         
-        Psi_model = self.project_model(slices, pupil_func, objectFT, n_jobs, backend)
+        Psi_model = self.project_model(slices, pupil_func, objectFT)
 
         Psi_data_reflection = self.project_data(images, 2*Psi_model - PSI)
 
@@ -255,8 +245,8 @@ class HPR(AlgorithmKernel):
     def __init__(self, beta = 0.9):
 
         self.beta = beta
-    def step(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
-        Psi_model = self.project_model(slices, pupil_func, objectFT, n_jobs, backend)
+    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        Psi_model = self.project_model(slices, pupil_func, objectFT)
 
         Psi_data_reflection = self.project_data(images, 2*Psi_model - PSI)
 
@@ -270,8 +260,8 @@ class DM_PIE(AlgorithmKernel):
 
         self.alpha = alpha
 
-    def step(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
-        Psi_model = self.project_model(slices, pupil_func, objectFT, n_jobs, backend)
+    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+        Psi_model = self.project_model(slices, pupil_func, objectFT)
 
         Psi_reflection = (1 + self.alpha) * Psi_model - self.alpha * PSI
 
@@ -286,9 +276,9 @@ class ePIE(AlgorithmKernel):
 
         self.alpha_obj = alpha_obj
 
-    def step(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
         
-        Psi_model = self.project_model(slices, pupil_func, objectFT, n_jobs, backend)
+        Psi_model = self.project_model(slices, pupil_func, objectFT)
 
         Psi_data = self.project_data(images, Psi_model)
 

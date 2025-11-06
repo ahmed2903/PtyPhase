@@ -9,9 +9,9 @@ from scipy.ndimage import zoom
 from joblib import Parallel, delayed
 
 class PhaseRetrievalBase(ABC):
-    def __init__(self, images, 
-                 pupil_func, 
-                 kout_vec, 
+    def __init__(self, images: list, 
+                 pupil_func: np.ndarray, 
+                 kins, 
                  ks_pupil, 
                  lr_psize,
                  alpha=0.1, 
@@ -22,11 +22,9 @@ class PhaseRetrievalBase(ABC):
                  backend="threading"):
         
         self.images = images
-        self.num_images = self.images.shape[0]
-        self.img_shape = self.images.shape[1:]
         
         self.pupil_func = pupil_func
-        self.kout_vec = kout_vec
+        self.kins = kins
         self.ks_pupil = ks_pupil
         self.lr_psize = lr_psize
         self.alpha = alpha
@@ -53,8 +51,8 @@ class PhaseRetrievalBase(ABC):
             
         self._prep_images()
         
-        self.kout_vec = np.array(self.kout_vec)
-        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.images, self.ks_pupil, self.lr_psize, extend = self.extend)
+        
+        self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.img_shape, self.ks_pupil, self.lr_psize, extend = self.extend)
 
         self.kx_min_n, self.kx_max_n = self.bounds_x
         self.ky_min_n, self.ky_max_n = self.bounds_y
@@ -74,39 +72,13 @@ class PhaseRetrievalBase(ABC):
         self.compute_bounds()
         
         self.PSI = self.get_psi()
-    
-    # def _extract_patch_to_center(self, bounds, arr):
-        
-    #     (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-    #     out = np.zeros_like(self.pupil_func, dtype=complex)
-        
-    #     out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
-        
-    #     return out
 
-    def _insert_center_to_kvec_location(self, sl, arr):
-        
-        # (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-        # out = np.zeros_like(arr)
-        # out[lx:hx, ly:hy] = arr[rl:rh, cl:ch]
-        out = arr[sl]
-        return out
-    
-    def _extract_patch_to_center(self, sl, arr):
-        
-        # (lx, hx, ly, hy), (rl, rh, cl, ch) = bounds
-        #out = np.zeros_like(arr)
-        #out[rl:rh, cl:ch] = arr[lx:hx, ly:hy]
-        out = arr[sl]
-        return out
-    
-    def _compute_single_exit(self, slices, pupil, objectFT):
+
+    @staticmethod
+    def compute_single_exit(slices, pupil, objectFT):
         """Compute exit wave for a single k-vector"""
         
-        this_pupil = self._extract_patch_to_center(slices, pupil)
-        # print(this_pupil.shape)
-        # print(objectFT.shape)
-        psi = this_pupil * objectFT
+        psi = pupil[slices] * objectFT
         
         return psi
 
@@ -116,13 +88,34 @@ class PhaseRetrievalBase(ABC):
         exit initialization where the pupil function and the object spectrum
         are at the centre
         '''
-        
-        exit_FT_centred = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
-            delayed(self._compute_single_exit)(sl, self.pupil_func, self.hr_fourier_image)
-            for sl in self.pupil_slices
+        PSIs = []
+
+        def project_one_streak(slices, objectFT):
+            Psi_model = [self.compute_single_exit(sl, self.pupil_func, objectFT) for sl in slices]
+            return np.stack(Psi_model, axis=0)
+
+        Psi_all = Parallel(n_jobs=self.num_jobs, backend=self.backend)(
+            delayed(project_one_streak)(slices, objFT)
+            for slices, objFT in zip(self.pupil_slices, self.hr_fourier_image)
         )
         
-        return np.array(exit_FT_centred)
+        # for slices, object_ft in zip(self.pupil_slices, self.hr_fourier_image):
+
+        #     exit_FTs = []
+            
+        #     for sl in slices:
+                
+        #         exit_FT = self.compute_single_exit(sl, self.pupil_func, object_ft)
+
+        #         exit_FTs.append(exit_FT)
+                
+        #     PSIs.append(np.array(exit_FTs))
+        
+        # return PSIs
+        
+        return Psi_all
+    
+        
     
     def _compute_patch_bounds(self, kout):
         
@@ -132,10 +125,10 @@ class PhaseRetrievalBase(ABC):
         ky_cidx = (ky_iter - self.ky_min_n) / self.dky
 
         lx = round(max(kx_cidx - self.omega_obj_x / (2 * self.dkx), 0))
-        hx = round(kx_cidx + self.omega_obj_x / (2 * self.dkx)) + (1 if self.nx_lr % 2 != 0 else 0)
+        hx = round(kx_cidx + self.omega_obj_x / (2 * self.dkx)) + (1 if self.img_shape[0] % 2 != 0 else 0)
 
         ly = round(max(ky_cidx - self.omega_obj_y / (2 * self.dky), 0))
-        hy = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.ny_lr % 2 != 0 else 0)
+        hy = round(ky_cidx + self.omega_obj_y / (2 * self.dky)) + (1 if self.img_shape[1] % 2 != 0 else 0)
         
         rl = self.pupil_shape[0]//2 - self.img_shape[0]//2
         rh = self.pupil_shape[0]//2 + self.img_shape[0]//2
@@ -143,18 +136,30 @@ class PhaseRetrievalBase(ABC):
         ch =  self.pupil_shape[1]//2 + self.img_shape[1]//2
 
         return (lx, hx, ly, hy), (rl, rh, cl, ch)
-    
+
+    @time_it
     def compute_bounds(self):
 
         self.patch_bounds = []
-        
-        for kout in self.kout_vec:
-            (lx, hx, ly, hy), (rl, rh, cl, ch) = self._compute_patch_bounds(
-                kout)
-            
-            self.patch_bounds.append(((lx, hx, ly, hy), (rl, rh, cl, ch)))
+        self.pupil_slices = []
 
-        self.pupil_slices = [(slice(lx, hx), slice(ly, hy)) for (lx, hx, ly, hy), _ in self.patch_bounds]
+        
+        for ks_streak in self.kins:
+
+            bounds_streak = []
+            slices_streak = []
+            
+            for kout in ks_streak:
+                
+                (lx, hx, ly, hy), (rl, rh, cl, ch) = self._compute_patch_bounds(kout)
+            
+                bounds_streak.append(((lx, hx, ly, hy), (rl, rh, cl, ch)))
+
+                slices_streak.append((slice(lx,hx), slice(ly,hy)))
+                
+            self.patch_bounds.append(bounds_streak)
+
+            self.pupil_slices.append(slices_streak)
         
     def _upsample_coh_img(self, image, shape):
         
@@ -176,9 +181,26 @@ class PhaseRetrievalBase(ABC):
         self.coherent_imgs_upsampled = np.array(padded_images)
         
     def _prep_images(self):
+
+
+        if type(self.images) != list:
+            
+            self.images = [self.images]
+                
+
+        self.num_streaks = len(self.images)
+
+        self.num_images = sum([img.shape[0] for img in self.images])
+
+        self.img_shape = self.images[0].shape[1:]
+
+
+        if type(self.kins) != list:
+            
+            self.kins = [self.kins]
+                    
+        assert(len(self.kins) == self.num_images, 'Length of images list must match length of kins list')
         
-        self.images = np.array(self.images)
-    
     def _initiate_recons_images(self):
         
         if self.hr_obj_image is None and self.hr_fourier_image is None: 
@@ -197,9 +219,8 @@ class PhaseRetrievalBase(ABC):
             #self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
             self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
             
-            
-        self.nx_lr, self.ny_lr = self.images[0].shape
-        self.nx_hr, self.ny_hr = self.hr_fourier_image.shape
+        self.hr_fourier_image = [self.hr_fourier_image for _ in range(self.num_streaks)]        
+        self.hr_obj_image = [self.hr_obj_image for _ in range(self.num_streaks)]
         
     def _load_pupil(self):
         
@@ -319,6 +340,9 @@ class LivePlot:
             img_amp, img_phase, fourier_amp: Image objects for real-time updates.
             loss_im: Line object for loss plot.
         """
+        
+        central_idx = self.num_streaks//2
+        
         # Create figure with GridSpec for custom layout
         fig = plt.figure(figsize=(8, 12))
         gs = fig.add_gridspec(3, 2, hspace=0.05, wspace=0.2)
@@ -338,16 +362,16 @@ class LivePlot:
         axes = [[ax_amp, ax_phase], [ax_fourier, ax_pupil], ax_loss]
         
         # Initialize the plots with the initial image
-        img_amp = ax_amp.imshow(np.abs(self.hr_obj_image), cmap='viridis')
+        img_amp = ax_amp.imshow(np.abs(self.hr_obj_image[central_idx]), cmap='viridis')
         ax_amp.set_title("Object Amplitude")
         cbar_amp = plt.colorbar(img_amp, ax=ax_amp)
         
-        img_phase = ax_phase.imshow(np.angle(self.hr_obj_image), cmap='viridis')
+        img_phase = ax_phase.imshow(np.angle(self.hr_obj_image[central_idx]), cmap='viridis')
         ax_phase.set_title("Object Phase")
         img_phase.set_clim(-np.pi, np.pi)
         cbar_phase = plt.colorbar(img_phase, ax=ax_phase)
         
-        fourier_amp = ax_fourier.imshow(np.log1p(np.abs(self.hr_fourier_image)), cmap='viridis')
+        fourier_amp = ax_fourier.imshow(np.log1p(np.abs(self.hr_fourier_image[central_idx])), cmap='viridis')
         ax_fourier.set_title("Fourier Amplitude")
         cbar_fourier = plt.colorbar(fourier_amp, ax=ax_fourier)
         
@@ -385,11 +409,13 @@ class LivePlot:
             it: Current iteration number.
             axes: List of axes objects.
         """
+        central_idx = self.num_streaks//2
+
         img_amp, img_phase, fourier_amp, pupil_phase, loss_im, fig, it, axes = self.img_amp, self.img_phase, self.fourier_amp, self.pupil_phase, self.loss_im, self.fig, self.iters_passed, self.axes
         
-        amplitude_obj = np.abs(self.hr_obj_image)
-        phase_obj = np.angle(self.hr_obj_image)
-        amplitude_ft =np.log1p(np.abs(self.hr_fourier_image))
+        amplitude_obj = np.abs(self.hr_obj_image[central_idx])
+        phase_obj = np.angle(self.hr_obj_image[central_idx])
+        amplitude_ft =np.log1p(np.abs(self.hr_fourier_image[central_idx]))
         pupil_pha = np.angle(self.pupil_func)
         
         img_amp.set_data(amplitude_obj)

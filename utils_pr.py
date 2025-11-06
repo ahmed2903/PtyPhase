@@ -52,7 +52,7 @@ def calc_obj_freq_bandwidth(lr_psize):
 
     return omega_obj_x, omega_obj_y
 
-def prepare_dims(images, pupil_kins, lr_psize, extend = None, band_multiplier = 1):
+def prepare_dims(image_shp, pupil_kins, lr_psize, extend = None, band_multiplier = 1):
     """
     Prepare the dimensions of the high resolution fourier space image. 
 
@@ -63,12 +63,11 @@ def prepare_dims(images, pupil_kins, lr_psize, extend = None, band_multiplier = 
     # Convert inputs to numpy arrays
     pupil_kins = np.array(pupil_kins)
 
-    # Low-resolution image shape
-    coh_img_dim = images[0].shape
-    nx_lr, ny_lr = coh_img_dim
+    # Low-resolution image shape    
+    nx_lr, ny_lr = image_shp
 
     # Object size == Scan length
-    Lx, Ly = coh_img_dim[0] * lr_psize, coh_img_dim[1] * lr_psize
+    Lx, Ly = image_shp[0] * lr_psize, image_shp[1] * lr_psize
 
     # High-resolution Fourier pixel size 
     dkx, dky = 2 * np.pi / Lx, 2 * np.pi / Ly
