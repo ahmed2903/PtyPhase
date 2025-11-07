@@ -168,7 +168,7 @@ class AlgorithmKernel:
         errors = []
         
         for old_psi, new_psi in zip(old_psi_list, new_psi_list):
-            err = np.sum(np.linalg.norm(new_psi - old_psi)**2) #/ np.linalg.norm(old_psi)
+            err = np.linalg.norm(new_psi - old_psi) / np.linalg.norm(old_psi)
             errors.append(err)
             
         total_error = np.mean(errors)

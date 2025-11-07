@@ -210,4 +210,4 @@ class Pipeline:
                 
                 iterations_done += iter_to_run
         
-        engine._post_process()
+        self._post_process()
