@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
 import numpy as np
 from IPython.display import display, clear_output
-from .plotting import plot_images_side_by_side
+from .plotting import plot_images_side_by_side, two_lists_one_slider
 import h5py
 from .utils_pr import time_it, prepare_dims, calc_obj_freq_bandwidth, pad_to_shape, make_dims_even
 from scipy.ndimage import zoom 
@@ -16,8 +16,8 @@ class PhaseRetrievalBase(ABC):
                  lr_psize,
                  alpha=0.1, 
                  beta=0.1, 
-                 hr_fourier_image = None, 
-                 hr_obj_image = None,
+                 rec_fourier_images = None, 
+                 rec_obj_images = None,
                  num_jobs=4, 
                  backend="threading"):
         
@@ -30,8 +30,8 @@ class PhaseRetrievalBase(ABC):
         self.alpha = alpha
         self.beta = beta
         
-        self.hr_obj_image = hr_obj_image
-        self.hr_fourier_image = hr_fourier_image
+        self.rec_obj_images = rec_obj_images
+        self.rec_fourier_images = rec_fourier_images
         self.losses = []
         self.iters_passed = 0
         self.iter_loss = 0
@@ -96,22 +96,8 @@ class PhaseRetrievalBase(ABC):
 
         Psi_all = Parallel(n_jobs=self.num_jobs, backend=self.backend)(
             delayed(project_one_streak)(slices, objFT)
-            for slices, objFT in zip(self.pupil_slices, self.hr_fourier_image)
+            for slices, objFT in zip(self.pupil_slices, self.rec_fourier_images)
         )
-        
-        # for slices, object_ft in zip(self.pupil_slices, self.hr_fourier_image):
-
-        #     exit_FTs = []
-            
-        #     for sl in slices:
-                
-        #         exit_FT = self.compute_single_exit(sl, self.pupil_func, object_ft)
-
-        #         exit_FTs.append(exit_FT)
-                
-        #     PSIs.append(np.array(exit_FTs))
-        
-        # return PSIs
         
         return Psi_all
     
@@ -203,24 +189,24 @@ class PhaseRetrievalBase(ABC):
         
     def _initiate_recons_images(self):
         
-        if self.hr_obj_image is None and self.hr_fourier_image is None: 
+        if self.rec_obj_images is None and self.rec_fourier_images is None: 
             
-            self.hr_obj_image = np.ones_like(self.images[0]).astype(complex)
-            self.hr_fourier_image = np.ones_like(self.images[0]).astype(complex)
-            #self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
-            #self.hr_obj_image = pad_to_shape(self.hr_obj_image, self.pupil_func.shape)
+            self.rec_obj_images = np.ones_like(self.images[0]).astype(complex)
+            self.rec_fourier_images = np.ones_like(self.images[0]).astype(complex)
+            #self.rec_fourier_images = pad_to_shape(self.rec_fourier_images, self.pupil_func.shape)
+            #self.rec_obj_images = pad_to_shape(self.rec_obj_images, self.pupil_func.shape)
         
-        elif self.hr_fourier_image is None:
-            self.hr_fourier_image = self.forward_fft(self.hr_obj_image)
-            #self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
-            #self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
+        elif self.rec_fourier_images is None:
+            self.rec_fourier_images = self.forward_fft(self.rec_obj_images)
+            #self.rec_fourier_images = pad_to_shape(self.rec_fourier_images, self.pupil_func.shape)
+            #self.rec_obj_images = self.inverse_fft(self.rec_fourier_images)
             
-        elif self.hr_obj_image is None:
-            #self.hr_fourier_image = pad_to_shape(self.hr_fourier_image, self.pupil_func.shape)
-            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
+        elif self.rec_obj_images is None:
+            #self.rec_fourier_images = pad_to_shape(self.rec_fourier_images, self.pupil_func.shape)
+            self.rec_obj_images = self.inverse_fft(self.rec_fourier_images)
             
-        self.hr_fourier_image = [self.hr_fourier_image for _ in range(self.num_streaks)]        
-        self.hr_obj_image = [self.hr_obj_image for _ in range(self.num_streaks)]
+        self.rec_fourier_images = [self.rec_fourier_images for _ in range(self.num_streaks)]        
+        self.rec_obj_images = [self.rec_obj_images for _ in range(self.num_streaks)]
         
     def _load_pupil(self):
         
@@ -295,14 +281,14 @@ class PhaseRetrievalBase(ABC):
 
             recon_group = h5f.create_group("Reconstructed_data")
             # Save reconstructed images 
-            amp = np.abs(self.hr_obj_image)
-            pha = np.angle(self.hr_obj_image)
+            amp = np.abs(self.rec_obj_images)
+            pha = np.angle(self.rec_obj_images)
             recon_group.create_dataset("Object_amplitude", data=amp, compression="gzip")
             recon_group.create_dataset("Object_phase", data=pha, compression="gzip")
             
             # Save spectrum 
-            amp = np.abs(self.hr_fourier_image)
-            pha = np.angle(self.hr_fourier_image)
+            amp = np.abs(self.rec_fourier_images)
+            pha = np.angle(self.rec_fourier_images)
             recon_group.create_dataset("Fourier_amplitude", data=amp, compression="gzip")
             recon_group.create_dataset("Fourier_phase", data=pha, compression="gzip")
             
@@ -362,16 +348,16 @@ class LivePlot:
         axes = [[ax_amp, ax_phase], [ax_fourier, ax_pupil], ax_loss]
         
         # Initialize the plots with the initial image
-        img_amp = ax_amp.imshow(np.abs(self.hr_obj_image[central_idx]), cmap='viridis')
+        img_amp = ax_amp.imshow(np.abs(self.rec_obj_images[central_idx]), cmap='viridis')
         ax_amp.set_title("Object Amplitude")
         cbar_amp = plt.colorbar(img_amp, ax=ax_amp)
         
-        img_phase = ax_phase.imshow(np.angle(self.hr_obj_image[central_idx]), cmap='viridis')
+        img_phase = ax_phase.imshow(np.angle(self.rec_obj_images[central_idx]), cmap='viridis')
         ax_phase.set_title("Object Phase")
         img_phase.set_clim(-np.pi, np.pi)
         cbar_phase = plt.colorbar(img_phase, ax=ax_phase)
         
-        fourier_amp = ax_fourier.imshow(np.log1p(np.abs(self.hr_fourier_image[central_idx])), cmap='viridis')
+        fourier_amp = ax_fourier.imshow(np.log1p(np.abs(self.rec_fourier_images[central_idx])), cmap='viridis')
         ax_fourier.set_title("Fourier Amplitude")
         cbar_fourier = plt.colorbar(fourier_amp, ax=ax_fourier)
         
@@ -413,9 +399,9 @@ class LivePlot:
 
         img_amp, img_phase, fourier_amp, pupil_phase, loss_im, fig, it, axes = self.img_amp, self.img_phase, self.fourier_amp, self.pupil_phase, self.loss_im, self.fig, self.iters_passed, self.axes
         
-        amplitude_obj = np.abs(self.hr_obj_image[central_idx])
-        phase_obj = np.angle(self.hr_obj_image[central_idx])
-        amplitude_ft =np.log1p(np.abs(self.hr_fourier_image[central_idx]))
+        amplitude_obj = np.abs(self.rec_obj_images[central_idx])
+        phase_obj = np.angle(self.rec_obj_images[central_idx])
+        amplitude_ft =np.log1p(np.abs(self.rec_fourier_images[central_idx]))
         pupil_pha = np.angle(self.pupil_func)
         
         img_amp.set_data(amplitude_obj)
@@ -434,16 +420,11 @@ class LivePlot:
         if it > 1:
             ax_loss.set_yscale('log')
         
-        # # Update amplitude colormap limits
-        # amp_mean = np.mean(amplitude_obj)
-        # vmin = max(amp_mean + 2 * amp_mean, 0)
         
         vmax = amplitude_obj.max()
         img_amp.set_clim(vmin=None, vmax = vmax)
         
         # # Update Fourier amplitude colormap limits
-        # ft_mean = np.mean(amplitude_ft)
-        # vmin = ft_mean + 2 * ft_mean
         vmax = amplitude_ft.max()
         fourier_amp.set_clim(vmin=None, vmax = vmax)
         
@@ -456,28 +437,28 @@ class Plot:
     def plot_rec_obj(self, 
                      vmin1= None, vmax1=None, 
                      vmin2= -np.pi, vmax2=np.pi, 
-                     title1 = "Object Amplitude", title2 = "Object Phase", cmap1 = "viridis", cmap2 = "viridis"):
+                        cmap1 = "viridis", cmap2 = "viridis"):
         
-        image1 = np.abs(self.hr_obj_image)
-        image2 = np.angle(self.hr_obj_image)
+        image1 = np.abs(self.rec_obj_images)
+        image2 = np.angle(self.rec_obj_images)
     
-        plot_images_side_by_side(image1, image2, 
+        two_lists_one_slider(image1, image2, 
                                  vmin1= vmin1, vmax1=vmax1, 
                                  vmin2= vmin2, vmax2=vmax2, 
-                                 title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
+                                 cmap1=cmap1, cmap2=cmap2)
     
     def plot_rec_fourier(self, 
                          vmin1= None, vmax1=None, 
                      vmin2= -np.pi, vmax2=np.pi, 
-                         title1 = "Fourier Amplitude", title2 = "Fourier Phase", cmap1 = "viridis", cmap2 = "viridis"):
+                     cmap1 = "viridis", cmap2 = "viridis"):
         
-        image1 = np.abs(self.hr_fourier_image)
-        image2 = np.angle(self.hr_fourier_image)
+        image1 = np.abs(self.rec_fourier_images)
+        image2 = np.angle(self.rec_fourier_images)
     
-        plot_images_side_by_side(image1, image2, 
+        two_lists_one_slider(image1, image2, 
                                  vmin1= vmin1, vmax1=vmax1, 
                                  vmin2= vmin2, vmax2=vmax2, 
-                                 title1=title1, title2=title2, cmap1=cmap1, cmap2=cmap2, figsize=(10, 5), show = True)
+                                 cmap1=cmap1, cmap2=cmap2)
     
     
     def plot_pupil_func(self, 

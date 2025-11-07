@@ -39,8 +39,8 @@ class AlgorithmKernel:
     ####### Object Updates ###########
 
 
-    def update_object_ft(self, PSI, pupil, slices):
-
+    def update_object_ft_single(self, PSI, pupil, slices):
+        "Update object ft for a single set of kins"
         patch_shape = PSI[0].shape
         denom = np.zeros(patch_shape, dtype=np.float64)
         numer = np.zeros(patch_shape, dtype=np.complex128)
@@ -52,20 +52,22 @@ class AlgorithmKernel:
         
         return numer / (denom + 1e-8)
 
-    def update_object_ft_multi(self, PSI_list, pupil, slices_list):
-
+    def update_object_fts(self, PSI_list, pupil, slices_list):
+        "Update object ft for a multiple sets of kins"
         objectFT_updates = []
         
         for PSI, slices in zip(PSI_list, slices_list):
 
-            objectFT_updates.append(self.update_object_ft(PSI, pupil, slices) )
+            objectFT_updates.append(self.update_object_ft_single(PSI, pupil, slices) )
                         
         return objectFT_updates
         
     ############# Pupil Update ###############
     
-    def update_pupil_multi(self, PSI_list, objectFT_list, slices_list, pupil_func, ctf):
-        """Shared pupil update across all streaks."""
+    def update_pupil(self, PSI_list, objectFT_list, slices_list, pupil_func, ctf):
+        
+        """Shared pupil update across all sets of kins."""
+        
         pupil_shape = pupil_func.shape
         denom = np.zeros(pupil_shape, dtype=np.float64)
         numer = np.zeros(pupil_shape, dtype=np.complex128)
@@ -74,11 +76,6 @@ class AlgorithmKernel:
             
             for sl, psi_i in zip(slices, PSI):
                 
-                tmp_obj = np.zeros(pupil_shape, dtype=np.complex128)
-                tmp_psi = np.zeros(pupil_shape, dtype=np.complex128)
-                
-                # tmp_obj[sl] = objectFT
-                # tmp_psi[sl] = psi_i
 
                 denom[sl] += np.abs(objectFT)**2
                 numer[sl] += np.conjugate(objectFT) * psi_i
@@ -88,9 +85,9 @@ class AlgorithmKernel:
         pha = np.angle(pupil_func_update) * np.abs(ctf)
         amp = np.abs(pupil_func_update) * np.abs(ctf)
         
-        return  amp * np.exp(1j * pha) # pupil_func_update 
+        return  amp * np.exp(1j * pha) 
 
-    def update_pupil(self, PSI, objectFT, slices, pupil_func, ctf):
+    def update_pupil_single(self, PSI, objectFT, slices, pupil_func, ctf):
         
         pupil_shape = pupil_func.shape
         denom = np.zeros(pupil_shape, dtype=np.float64)
@@ -134,8 +131,7 @@ class AlgorithmKernel:
     def _compute_single_exit(self, sl, pupil, objectFT):
         """Compute exit wave for a single k-vector"""
         
-        this_pupil = pupil[sl] 
-        psi = this_pupil * objectFT
+        psi = pupil[sl] * objectFT
         
         return psi
 
@@ -143,25 +139,14 @@ class AlgorithmKernel:
         '''
         exit initialization where the pupil function and the object spectrum
         are at the centre
+        this only works for a single set of kins.
+        it is parallised for all sets in self.step. 
         '''
 
         Psi_model = [self._compute_single_exit(sl, pupil, objectFT) for sl in slices]
         
         return np.stack(Psi_model, axis=0)
 
-    
-    # def project_model(self, slices_list, pupil, objectFT_list, n_jobs, backend):
-    #     print(type(slices_list))
-    #     print(type(objectFT_list))
-    #     print(pupil.shape)
-        
-    #     Psi_all = Parallel(n_jobs=n_jobs, backend=backend)(
-    #         delayed(self.project_model_single)(slices, pupil, obj)
-    #         for slices, obj in zip(slices_list, objectFT_list)
-    #     )
-        
-    #     return Psi_all
-    
 
     def compute_error(self, old_psi_list, new_psi_list):
 
@@ -183,7 +168,7 @@ class DM(AlgorithmKernel):
 
         self.beta_decay = beta_decay
         
-    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step_single(self, slices, objectFT, pupil_func, PSI, images):
         
         Psi_model = self.project_model(slices, pupil_func, objectFT)
         
@@ -210,17 +195,13 @@ class RAAR(AlgorithmKernel):
         self.beta_decay = beta_decay
         
     
-    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
-
-
+    def step_single(self, slices, objectFT, pupil_func, PSI, images):
          
         Psi_reflection_model = 2*self.project_model(slices, pupil_func, objectFT) - PSI
         
         Psi_project_model = self.project_data(images, Psi_reflection_model)
 
         Psi_n = self.beta * Psi_project_model + (1-self.beta) * PSI
-
-        
             
         return Psi_n
     
@@ -228,7 +209,7 @@ class RAAR(AlgorithmKernel):
 
 class AAR(AlgorithmKernel):
     
-    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step_single(self, slices, objectFT, pupil_func, PSI, images):
         
         Psi_model = self.project_model(slices, pupil_func, objectFT)
 
@@ -245,7 +226,7 @@ class HPR(AlgorithmKernel):
     def __init__(self, beta = 0.9):
 
         self.beta = beta
-    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step_single(self, slices, objectFT, pupil_func, PSI, images):
         Psi_model = self.project_model(slices, pupil_func, objectFT)
 
         Psi_data_reflection = self.project_data(images, 2*Psi_model - PSI)
@@ -260,7 +241,7 @@ class DM_PIE(AlgorithmKernel):
 
         self.alpha = alpha
 
-    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step_single(self, slices, objectFT, pupil_func, PSI, images):
         Psi_model = self.project_model(slices, pupil_func, objectFT)
 
         Psi_reflection = (1 + self.alpha) * Psi_model - self.alpha * PSI
@@ -276,7 +257,7 @@ class ePIE(AlgorithmKernel):
 
         self.alpha_obj = alpha_obj
 
-    def step_single(self, slices, objectFT, pupil_func, PSI, images, n_jobs, backend):
+    def step_single(self, slices, objectFT, pupil_func, PSI, images):
         
         Psi_model = self.project_model(slices, pupil_func, objectFT)
 

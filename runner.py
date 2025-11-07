@@ -24,7 +24,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         
         if live_plot and self.liveplot_init:
             
-            self.hr_obj_image = self.inverse_fft(self.hr_fourier_image)
+            self.rec_obj_images = self.inverse_fft(self.rec_fourier_images)
             self._initialize_live_plot()
             self._update_live_plot()
             self.liveplot_init = False
@@ -37,9 +37,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             
             # ________ Update PSI ________
             self.PSI = kernel.step(PSI_list=self.PSI, 
-                                  objectFT_list = self.hr_fourier_image, 
+                                  objectFT_list = self.rec_fourier_images, 
                                   pupil_func = self.pupil_func, 
-                                  # bounds = self.patch_bounds, 
                                   slices_list=self.pupil_slices,
                                     images_list = self.images,
                                   n_jobs = self.num_jobs, 
@@ -52,13 +51,10 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             # ________ Object update ________
             if object_steps is not None:
                 if (it % (object_steps + pupil_steps)) < object_steps:
-                    self.hr_fourier_image = kernel.update_object_ft_multi(
+                    self.rec_fourier_images = kernel.update_object_fts(
                         PSI_list=self.PSI, 
                         pupil=self.pupil_func, 
-                        # bounds=self.patch_bounds,
-                        slices_list= self.pupil_slices #self.patch_bounds, 
-                        # n_jobs=self.num_jobs, 
-                        # backend=self.backend
+                        slices_list= self.pupil_slices 
                     )
                     print('Object Update')
         
@@ -66,13 +62,10 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 else:
                     self.pupil_func = kernel.update_pupil(
                         PSI_list=self.PSI, 
-                        objectFT_list=self.hr_fourier_image, 
-                        # bounds=self.patch_bounds, 
+                        objectFT_list=self.rec_fourier_images, 
                         slices_list = self.pupil_slices,
                         pupil_func=self.pupil_func, 
                         ctf=self.ctf,
-                        #n_jobs=self.num_jobs, 
-                        #backend=self.backend
                     )
                     
                     print('Pupil Update')
@@ -85,26 +78,20 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                         )
                         print("Zernike Update")
             else: 
-                self.hr_fourier_image = kernel.update_object_ft_multi(
+                self.rec_fourier_images = kernel.update_object_fts(
                         PSI_list=self.PSI, 
                         pupil=self.pupil_func, 
-                        # bounds=self.patch_bounds,
-                        slices_list= self.pupil_slices #self.patch_bounds, 
-                        # n_jobs=self.num_jobs, 
-                        # backend=self.backend
+                        slices_list= self.pupil_slices 
                     )
                 
                 print('Object Update')
                 
-                self.pupil_func = kernel.update_pupil_multi(
+                self.pupil_func = kernel.update_pupil(
                         PSI_list=self.PSI, 
-                        objectFT_list=self.hr_fourier_image, 
-                        # bounds=self.patch_bounds, 
+                        objectFT_list=self.rec_fourier_images, 
                         slices_list = self.pupil_slices,
                         pupil_func=self.pupil_func, 
                         ctf=self.ctf,
-                        # n_jobs=self.num_jobs, 
-                        # backend=self.backend
                     )
                     
                 print('Pupil Update')
@@ -127,17 +114,16 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
 
             if live_plot:
                 central_idx = self.num_streaks//2
-                self.hr_obj_image[central_idx] = self.inverse_fft(self.hr_fourier_image[central_idx])
+                self.rec_obj_images[central_idx] = self.inverse_fft(self.rec_fourier_images[central_idx])
                 self._update_live_plot()
 
     def _post_process(self):
 
-        # for imgft in self.
-        self.hr_obj_image = [self.inverse_fft(img) for img in self.hr_fourier_image]
+        self.rec_obj_images = [self.inverse_fft(img) for img in self.rec_fourier_images]
     
     def get_state(self):
         return dict(
-        objectFT=self.hr_fourier_image,
+        objectFT=self.rec_fourier_images,
         pupil=self.pupil_func,
         PSI=self.PSI,
         iters_passed=self.iters_passed,
@@ -145,7 +131,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         )
 
     def set_state(self, state: dict):
-        self.hr_fourier_image = state['objectFT']
+        self.rec_fourier_images = state['objectFT']
         self.pupil_func = state['pupil']
         self.PSI = state['PSI']
         self.iters_passed = state.get('iters_passed', 0)
