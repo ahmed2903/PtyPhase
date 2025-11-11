@@ -174,7 +174,7 @@ class Pipeline:
             self.engine.solve(kernel, iterations=n, object_steps=object_steps, pupil_steps=pupil_steps, 
                               zernike_steps=zernike_steps, live_plot=live_plot)
 
-        engine._post_process()
+        self.engine._post_process()
 
     def cycle(self, total_iterations: int, live_plot=False, pupil_steps=None, object_steps=None, zernike_steps=None):
         
@@ -196,4 +196,4 @@ class Pipeline:
                 
                 iterations_done += iter_to_run
         
-        self._post_process()
+        self.engine._post_process()

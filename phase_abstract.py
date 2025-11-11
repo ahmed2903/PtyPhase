@@ -188,26 +188,39 @@ class PhaseRetrievalBase(ABC):
         assert(len(self.kins) == self.num_images, 'Length of images list must match length of kins list')
         
     def _initiate_recons_images(self):
+
+        if self.rec_obj_images is not None and len(self.rec_obj_images) == len(self.images):
+
+            self.rec_fourier_images = [self.forward_fft(img) for img in self.rec_obj_images]
+
+        elif self.rec_fourier_images is not None and len(self.rec_fourier_images) == len(self.images):
+
+            self.rec_obj_images = [self.inverse_fft(img) for img in self.rec_fourier_images]
+
         
-        if self.rec_obj_images is None and self.rec_fourier_images is None: 
+        elif self.rec_obj_images is None and self.rec_fourier_images is None: 
             
             self.rec_obj_images = np.ones_like(self.images[0]).astype(complex)
             self.rec_fourier_images = np.ones_like(self.images[0]).astype(complex)
-            #self.rec_fourier_images = pad_to_shape(self.rec_fourier_images, self.pupil_func.shape)
-            #self.rec_obj_images = pad_to_shape(self.rec_obj_images, self.pupil_func.shape)
+            
+            self.rec_fourier_images = [self.rec_fourier_images for _ in range(self.num_streaks)]        
+            self.rec_obj_images = [self.rec_obj_images for _ in range(self.num_streaks)]
         
         elif self.rec_fourier_images is None:
             self.rec_fourier_images = self.forward_fft(self.rec_obj_images)
-            #self.rec_fourier_images = pad_to_shape(self.rec_fourier_images, self.pupil_func.shape)
-            #self.rec_obj_images = self.inverse_fft(self.rec_fourier_images)
+            
+            self.rec_fourier_images = [self.rec_fourier_images for _ in range(self.num_streaks)]        
+            self.rec_obj_images = [self.rec_obj_images for _ in range(self.num_streaks)]
             
         elif self.rec_obj_images is None:
-            #self.rec_fourier_images = pad_to_shape(self.rec_fourier_images, self.pupil_func.shape)
             self.rec_obj_images = self.inverse_fft(self.rec_fourier_images)
             
-        self.rec_fourier_images = [self.rec_fourier_images for _ in range(self.num_streaks)]        
-        self.rec_obj_images = [self.rec_obj_images for _ in range(self.num_streaks)]
+            self.rec_fourier_images = [self.rec_fourier_images for _ in range(self.num_streaks)]        
+            self.rec_obj_images = [self.rec_obj_images for _ in range(self.num_streaks)]
         
+
+
+    
     def _load_pupil(self):
         
         dims = round((self.kx_max_n - self.kx_min_n)/self.dkx), round((self.ky_max_n - self.ky_min_n)/self.dky)
@@ -276,6 +289,7 @@ class PhaseRetrievalBase(ABC):
             recon_params = h5f.create_group("Recon_Params")
             
             for key, value in metadata.items():
+                print(key, value)
                 recon_params.attrs[key] = value 
 
 

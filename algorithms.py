@@ -1,6 +1,6 @@
 import numpy as np
 from joblib import Parallel, delayed
-
+from .utils_pr import time_it
 
 fft_images = lambda imgs: np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(imgs, axes=(-2, -1)), axes=(-2, -1)), axes = (-2,-1))
 ifft_images = lambda imgs: np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(imgs, axes=(-2, -1)), axes=(-2, -1)), axes = (-2,-1))
@@ -17,7 +17,7 @@ class AlgorithmKernel:
     def step_single(self, slices, objectFT, PSI, images, n_jobs, backend):    
         raise NotImplementedError
     
-    
+    @time_it
     def step(self, slices_list, objectFT_list, PSI_list, images_list, pupil_func, n_jobs, backend):    
         
         n_streaks = len(slices_list)
@@ -27,11 +27,17 @@ class AlgorithmKernel:
         
         assert(type(objectFT_list) == type(PSI_list) == type(images_list) == type(slices_list) == list, 
                "slices_list, objectFT_list, PSI_list and images_list must have the same type (list)")
-        
-        Psi_updated_list = Parallel(n_jobs=n_jobs, backend=backend)(
-            delayed(self.step_single)(slices, objFT, pupil_func, psi, img, 1, 'threading')
-            for slices, objFT, psi, img in zip(slices_list, objectFT_list, PSI_list, images_list)
-        )
+
+        if len(PSI_list) > 1:
+            Psi_updated_list = Parallel(n_jobs=n_jobs, backend=backend)(
+                delayed(self.step_single)(slices, objFT, pupil_func, psi, img)
+                for slices, objFT, psi, img in zip(slices_list, objectFT_list, PSI_list, images_list)
+            )
+        else: 
+            Psi_updated_list = []
+            for slices, objFT, psi, img in zip(slices_list, objectFT_list, PSI_list, images_list):
+                
+                Psi_updated_list.append(self.step_single(slices, objFT, pupil_func, psi, img))
 
         return Psi_updated_list
 
@@ -50,8 +56,9 @@ class AlgorithmKernel:
             denom += np.abs(pupil_patch)**2
             numer += np.conjugate(pupil_patch) * psi_i
         
-        return numer / (denom + 1e-8)
+        return numer / (denom + 1e-12)
 
+    @time_it
     def update_object_fts(self, PSI_list, pupil, slices_list):
         "Update object ft for a multiple sets of kins"
         objectFT_updates = []
@@ -63,7 +70,7 @@ class AlgorithmKernel:
         return objectFT_updates
         
     ############# Pupil Update ###############
-    
+    @time_it
     def update_pupil(self, PSI_list, objectFT_list, slices_list, pupil_func, ctf):
         
         """Shared pupil update across all sets of kins."""
@@ -73,14 +80,15 @@ class AlgorithmKernel:
         numer = np.zeros(pupil_shape, dtype=np.complex128)
 
         for PSI, objectFT, slices in zip(PSI_list, objectFT_list, slices_list):
-            
+
+            # tmp_numer, tmp_denom = update_object_ft_single(PSI, objectFT, slices, pupil_func, ctf )
             for sl, psi_i in zip(slices, PSI):
                 
-
-                denom[sl] += np.abs(objectFT)**2
                 numer[sl] += np.conjugate(objectFT) * psi_i
+                denom[sl] += np.abs(objectFT)**2
+                
         
-        pupil_func_update = numer / (denom + 1e-8)
+        pupil_func_update = numer / (denom + 1e-12)
 
         pha = np.angle(pupil_func_update) * np.abs(ctf)
         amp = np.abs(pupil_func_update) * np.abs(ctf)
@@ -105,7 +113,7 @@ class AlgorithmKernel:
             denom[sl] += np.abs(this_objectFT[sl])**2
             numer[sl] += np.conjugate(this_objectFT[sl]) * this_PSI[sl] #* np.abs(ctf[lx:hx, ly:hy])
             
-        pupil_func_update = numer / (denom + 1e-8)
+        pupil_func_update = numer / (denom + 1e-12)
         pha = np.angle(pupil_func_update) * np.abs(ctf)
         amp = np.abs(pupil_func_update) * np.abs(ctf)
         return amp * np.exp(1j * pha) #pupil_func_update #
