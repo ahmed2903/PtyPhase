@@ -46,6 +46,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                                     images_list = self.images,
                                   n_jobs = self.num_jobs, 
                                    backend = self.backend, 
+                                   pupil_coords = self.pupil_coords,
                                    **step_args
                                   )
 
