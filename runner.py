@@ -19,7 +19,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
               object_steps = None,
               pupil_steps = None, 
               zernike_steps = None,
-              live_plot: bool = False):
+              live_plot: bool = False,
+              **kwargs):
         
         
         if live_plot and self.liveplot_init:
@@ -29,8 +30,10 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             self._update_live_plot()
             self.liveplot_init = False
         
+        step_args = self.GetKwArgs(kernel.step, kwargs)
         for it in range(iterations):
 
+            
             
             
             old_PSI = self.PSI.copy()
@@ -42,7 +45,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                                   slices_list=self.pupil_slices,
                                     images_list = self.images,
                                   n_jobs = self.num_jobs, 
-                                   backend = self.backend
+                                   backend = self.backend, 
+                                   **step_args
                                   )
 
             print('Step done')
@@ -166,13 +170,13 @@ class Pipeline:
         self.steps = steps
 
     
-    def run(self, live_plot=False, pupil_steps=None, object_steps=None, zernike_steps = None):
+    def run(self, live_plot=False, pupil_steps=None, object_steps=None, zernike_steps = None, **kwargs):
         
         for kernel, n in self.steps:
             
             print(f"Running {kernel.__class__.__name__} for {n} iters")
             self.engine.solve(kernel, iterations=n, object_steps=object_steps, pupil_steps=pupil_steps, 
-                              zernike_steps=zernike_steps, live_plot=live_plot)
+                              zernike_steps=zernike_steps, live_plot=live_plot, **kwargs)
 
         self.engine._post_process()
 

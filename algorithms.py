@@ -1,24 +1,29 @@
 import numpy as np
 from joblib import Parallel, delayed
 from .utils_pr import time_it
+from .zernike import SquarePolynomials
+import inspect
 
 fft_images = lambda imgs: np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(imgs, axes=(-2, -1)), axes=(-2, -1)), axes = (-2,-1))
 ifft_images = lambda imgs: np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(imgs, axes=(-2, -1)), axes=(-2, -1)), axes = (-2,-1))
 
-    
+fft_2D = lambda img: np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(img)))
+ifft_2D = lambda img: np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(img)))
+
 
 class AlgorithmKernel:
     """Base kernel interface for reciprocal-space phase retrieval algorithms.
 
     Methods operate on arrays kept in the Runner.
-    Kernels should be stateless (store only hyperparameters).
     """
     
     def step_single(self, slices, objectFT, PSI, images, n_jobs, backend):    
         raise NotImplementedError
     
     @time_it
-    def step(self, slices_list, objectFT_list, PSI_list, images_list, pupil_func, n_jobs, backend):    
+    def step(self, slices_list, objectFT_list, PSI_list, images_list, pupil_func, n_jobs, backend, **kwargs):    
+        
+        step_arguments = self.GetKwArgs(self.step_single, kwargs)
         
         n_streaks = len(slices_list)
         
@@ -31,18 +36,18 @@ class AlgorithmKernel:
         if len(PSI_list) > 1:
             Psi_updated_list = Parallel(n_jobs=n_jobs, backend=backend)(
                 delayed(self.step_single)(slices, objFT, pupil_func, psi, img)
-                for slices, objFT, psi, img in zip(slices_list, objectFT_list, PSI_list, images_list)
+                for slices, objFT, psi, img in zip(slices_list, objectFT_list, PSI_list, images_list, **step_arguments)
             )
         else: 
             Psi_updated_list = []
             for slices, objFT, psi, img in zip(slices_list, objectFT_list, PSI_list, images_list):
                 
-                Psi_updated_list.append(self.step_single(slices, objFT, pupil_func, psi, img))
+                Psi_updated_list.append(self.step_single(slices, objFT, pupil_func, psi, img, **step_arguments))
 
         return Psi_updated_list
 
         
-    ####### Object Updates ###########
+    # ~~~~___________ Objects Update ___________~~~~
 
 
     def update_object_ft_single(self, PSI, pupil, slices):
@@ -69,7 +74,7 @@ class AlgorithmKernel:
                         
         return objectFT_updates
         
-    ############# Pupil Update ###############
+    # ~~~~___________ Pupil Update ___________~~~~ 
     @time_it
     def update_pupil(self, PSI_list, objectFT_list, slices_list, pupil_func, ctf):
         
@@ -119,7 +124,8 @@ class AlgorithmKernel:
         return amp * np.exp(1j * pha) #pupil_func_update #
         
     
-    ######## project data #########
+    # ~~~~___________ Projections ___________~~~~
+    
     
     def project_data(self, images, Psi):
         '''
@@ -132,8 +138,6 @@ class AlgorithmKernel:
         Psi_  =  fft_images(psi_new)  
         
         return Psi_
-    
-    ########## Helpers ##############
 
    
     def _compute_single_exit(self, sl, pupil, objectFT):
@@ -155,6 +159,31 @@ class AlgorithmKernel:
         
         return np.stack(Psi_model, axis=0)
 
+    
+    def project_Zernike(self, objectFT, pupil, slices, pupil_coords):
+        
+        amp = np.abs(pupil)
+        pha = np.angle(pupil)
+        
+        zernike_pupil = amp * np.exp(
+                        1j * SquarePolynomials.project_wavefront(pha, coords=pupil_coords)
+                    )
+
+        Psi_zernike = [self._compute_single_exit(sl, zernike_pupil, objectFT) for sl in slices]
+        
+        return np.stack(Psi_zernike, axis=0)
+        
+        
+    def project_support(self, support, objectFT, pupil,slices):
+        
+        
+        objectFTnew =  fft_2D(ifft_2D(objectFT) * support)
+
+        Psi_supp = [self._compute_single_exit(sl, pupil, objectFTnew) for sl in slices]
+        
+        return Psi_supp
+    
+    # ~~~~___________ Helpers ___________~~~~
 
     def compute_error(self, old_psi_list, new_psi_list):
 
@@ -167,6 +196,17 @@ class AlgorithmKernel:
         total_error = np.mean(errors)
         
         return total_error, errors
+    
+    def GetKwArgs(self, obj, kwargs):
+        obj_sigs = []
+        obj_args = {}
+        for arg in inspect.signature(obj).parameters.values():
+            if not arg.default is inspect._empty:
+                obj_sigs.append(arg.name)
+        for key, value in kwargs.items():
+            if key in obj_sigs:
+                obj_args[key] = value
+        return obj_args
 
 
 class DM(AlgorithmKernel):
@@ -192,7 +232,26 @@ class DM(AlgorithmKernel):
 
         
 
-
+class DNC(AlgorithmKernel):
+    
+    def __init__(self, beta = 0.9, weights: list = [1.0,1.0,1.0,1.0]):
+        
+        self.beta = beta 
+        self.weights = weights 
+        
+    def step_single(self, slices, objectFT, PSI, pupil_func, images, support, pupil_coords):
+        
+        Reflection_model = 2 * self.project_model(slices, pupil_func, objectFT) - PSI
+        Reflection_data = 2 * self.project_data(images, PSI) - PSI
+        Reflection_zernike = 2 * self.project_Zernike(objectFT, pupil_func, slices, pupil_coords) - PSI
+        Reflection_support = 2 * self.project_support(support, objectFT, pupil_func, slices) - PSI
+        
+        
+        concur = self.weights[0] * Reflection_model + self.weights[1] * Reflection_data + self.weights[2] * Reflection_zernike + self.weights[3] * Reflection_support 
+        
+        Psi_n = PSI + self.beta( concur - PSI ) 
+        
+        return Psi_n
 
 class RAAR(AlgorithmKernel):
     

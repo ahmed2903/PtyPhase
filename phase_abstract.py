@@ -14,8 +14,6 @@ class PhaseRetrievalBase(ABC):
                  kins, 
                  ks_pupil, 
                  lr_psize,
-                 alpha=0.1, 
-                 beta=0.1, 
                  rec_fourier_images = None, 
                  rec_obj_images = None,
                  num_jobs=4, 
@@ -27,8 +25,6 @@ class PhaseRetrievalBase(ABC):
         self.kins = kins
         self.ks_pupil = ks_pupil
         self.lr_psize = lr_psize
-        self.alpha = alpha
-        self.beta = beta
         
         self.rec_obj_images = rec_obj_images
         self.rec_fourier_images = rec_fourier_images
