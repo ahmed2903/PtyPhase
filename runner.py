@@ -30,11 +30,9 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             self._update_live_plot()
             self.liveplot_init = False
         
-        step_args = self.GetKwArgs(kernel.step, kwargs)
+        step_args = self.GetKwArgs(kernel.step_single, kwargs)
+                
         for it in range(iterations):
-
-            
-            
             
             old_PSI = self.PSI.copy()
             
@@ -142,17 +140,21 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         self.iters_passed = state.get('iters_passed', 0)
         self.losses = state.get('losses', [])
     
-    def GetKwArgs(self, obj, kwargs):
-        obj_sigs = []
-        obj_args = {}
-        for arg in inspect.signature(obj).parameters.values():
-            if not arg.default is inspect._empty:
-                obj_sigs.append(arg.name)
-        for key, value in kwargs.items():
-            if key in obj_sigs:
-                obj_args[key] = value
-        return obj_args
+    # def GetKwArgs(self, obj, kwargs):
+    #     obj_sigs = []
+    #     obj_args = {}
+    #     for arg in inspect.signature(obj).parameters.values():
+    #         if not arg.default is inspect._empty:
+    #             obj_sigs.append(arg.name)
+    #     for key, value in kwargs.items():
+    #         #if key in obj_sigs:
+    #         obj_args[key] = value
+    #     return obj_args
 
+    def GetKwArgs(self, obj, kwargs):
+        obj_sigs = list(inspect.signature(obj).parameters.keys())
+        obj_args = {k: v for k, v in kwargs.items() if k in obj_sigs}
+        return obj_args
     
     def compute_error(self, image, PSI):
 
@@ -172,7 +174,6 @@ class Pipeline:
 
     
     def run(self, live_plot=False, pupil_steps=None, object_steps=None, zernike_steps = None, **kwargs):
-        
         for kernel, n in self.steps:
             
             print(f"Running {kernel.__class__.__name__} for {n} iters")

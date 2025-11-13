@@ -8,11 +8,10 @@ class ShrinkWrap():
     Works for 2D data
     Data is a torch tensor 
     """
-    def __init__(self, data, sigma, threshold, kernel_size, device):        
+    def __init__(self, data, sigma, threshold, kernel_size):        
         self.threshold = threshold
         self.sigma = sigma
         self.kernel_size = kernel_size
-        self.device = device
 
         if not isinstance(data, torch.Tensor):
 
@@ -28,7 +27,8 @@ class ShrinkWrap():
         self.kernel_size = int(4*self.sigma+1)
         sigma = self.sigma
         x = torch.arange(self.kernel_size, dtype=torch.float32) - self.kernel_size // 2
-        self.kernel = torch.exp(-0.5 * (x ** 2) / sigma ** 2).to(self.device)
+        self.kernel = torch.exp(-0.5 * (x ** 2) / sigma ** 2).to('cpu')
+        
         self.kernel = self.kernel / torch.sum(self.kernel)
         self.kernel = self.kernel.view(1, self.kernel_size).repeat(self.kernel_size, 1)
         
@@ -51,7 +51,7 @@ class ShrinkWrap():
     
         self.gaussian_fill()
         self.compute_support()
-        self.support = self.support.to(self.device)
+        self.support = self.support.to('cpu')
         
         return self.support
         
