@@ -275,28 +275,100 @@ class DNC(AlgorithmKernel):
         self.projections = projections
         self.weights = [w / sum(weights) for w in weights]
         self.replicas = [None for _ in range(len(projections))] # list of PSI
-        
-    def step_single(self, slices, objectFT, pupil_func, PSI , images, support, pupil_coords):
-        
-        
+    
+    def divide(self, PSI, projections):
 
-        gamma_D = 1/(self.beta)
-        gamma_C = -1/(self.beta)
+        return [proj(PSI) for proj in projections]
+    
+    def concur(self, PSI_list, weights=None):
+        
+        if weights is None:
+            weights = np.ones(len(PSI_list)) / len(PSI_list)
+        
+        out = np.zeros_like(PSI_list[0], dtype=PSI_list[0].dtype)
+        
+        for w, psi in zip(weights, PSI_list):
+            out += w * psi
+        
+        return out
+    
+        
+    def step(self, PSI, pupil_slices, object_slices,
+                    objectFTs, pupil_func, images, **kwargs):
 
-        fD_model = (1+gamma_D) * project_model(slices, pupil_func, objectFT) - gamma_D * PSI
-        fD_data = (1+gamma_D) * project_data(images, PSI) - gamma_D * PSI
-        fD_zernike = (1+gamma_D) * project_Zernike(objectFT, pupil_func, slices, pupil_coords) - gamma_D * PSI
-        fD_support = (1+gamma_D) * project_support(support, objectFT, pupil_func, slices) - gamma_D * PSI
-        
-        
-        PC_o_fD = self.weights[0] * fD_model + self.weights[1] * fD_data + self.weights[2] * fD_zernike + self.weights[3] * fD_support 
+        def P_model(PSI_in):
+            Psi_model = project_model(
+                pupil_slices=pupil_slices,
+                object_slices=object_slices,
+                pupil=pupil_func,
+                objectFTs=objectFTs
+            )
+            return Psi_model
 
-        PD_o_fC = PSI 
+        def P_data(PSI_in):
+            Psi_data = project_data(images, PSI_in)
+            return Psi_data
+
+        def P_support(PSI_in):
+            # 1. apply support in object domain
+            obj_supported = fft_2D(
+                ifft_2D(objectFTs) * self.support
+            )
+            # 2. regenerate PSI from (O,P)
+            Psi_sup = project_model(
+                pupil_slices=pupil_slices,
+                object_slices=object_slices,
+                pupil=pupil_func,
+                objectFTs=obj_supported
+            )
+            return Psi_sup
+
+        def P_zernike(PSI_in):
+            # zernike correction of probe
+            amp = np.abs(pupil_func)
+            pha = np.angle(pupil_func)
+            P_fixed = amp * np.exp(
+                1j * SquarePolynomials.project_wavefront(pha, coords=self.pupil_coords)
+            )
+            Psi_z = project_model(
+                pupil_slices=pupil_slices,
+                object_slices=object_slices,
+                pupil=P_fixed,
+                objectFTs=objectFTs
+            )
+            return Psi_z
         
         
-        Psi_n = PSI + self.beta * ( PC_o_fD - PSI ) 
+        projections = [P_model, P_data, P_support, P_zernike]
+        PD = self.divide(PSI, projections)
+        PC = self.concur(PD)
         
-        return Psi_n
+        beta = self.beta
+        PSI_reflect_C = 2 * PC - PSI        
+        PSI_reflect_D = 2 * PD[0] - PSI
+
+        # DM update:
+        PSI_next = PSI + beta * (
+            self.concur(self.divide(PSI_reflect_C, projections)) -
+            self.concur([project(PSI_reflect_D) for project in projections])
+        )
+        
+        # gamma_D = 1/(self.beta)
+        # gamma_C = -1/(self.beta)
+
+        # fD_model = (1+gamma_D) * project_model(slices, pupil_func, objectFT) - gamma_D * PSI
+        # fD_data = (1+gamma_D) * project_data(images, PSI) - gamma_D * PSI
+        # fD_zernike = (1+gamma_D) * project_Zernike(objectFT, pupil_func, slices, pupil_coords) - gamma_D * PSI
+        # fD_support = (1+gamma_D) * project_support(support, objectFT, pupil_func, slices) - gamma_D * PSI
+        
+        # PC_o_fD = self.weights[0] * fD_model + self.weights[1] * fD_data + self.weights[2] * fD_zernike + self.weights[3] * fD_support 
+
+        # PD_o_fC = PSI 
+        
+        
+        # Psi_n = PSI + self.beta * ( PC_o_fD - PSI ) 
+        
+        return PSI_next
 
 
 
