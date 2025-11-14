@@ -47,7 +47,6 @@ class PhaseRetrievalBase(ABC):
             
         self._prep_images()
         
-        
         self.bounds_x, self.bounds_y, self.dks = prepare_dims(self.img_shape, self.ks_pupil, self.lr_psize, extend = self.extend)
 
         self.kx_min_n, self.kx_max_n = self.bounds_x
@@ -60,9 +59,7 @@ class PhaseRetrievalBase(ABC):
         self._load_pupil()
         
         self.pupil_shape = self.pupil_func.shape
-        
-        # self.upsample_coherent_images()
-        
+                
         self._initiate_recons_images()
 
         self.compute_bounds()
@@ -70,33 +67,27 @@ class PhaseRetrievalBase(ABC):
         self.PSI = self.get_psi()
 
 
-    @staticmethod
-    def compute_single_exit(slices, pupil, objectFT):
-        """Compute exit wave for a single k-vector"""
-        
-        psi = pupil[slices] * objectFT
-        
-        return psi
-
     @time_it
     def get_psi(self):
         '''
         exit initialization where the pupil function and the object spectrum
         are at the centre
         '''
-        PSIs = []
-
-        def project_one_streak(slices, objectFT):
-            Psi_model = [self.compute_single_exit(sl, self.pupil_func, objectFT) for sl in slices]
-            return np.stack(Psi_model, axis=0)
-
-        Psi_all = Parallel(n_jobs=self.num_jobs, backend=self.backend)(
-            delayed(project_one_streak)(slices, objFT)
-            for slices, objFT in zip(self.pupil_slices, self.rec_fourier_images)
-        )
         
-        return Psi_all
-    
+        object_stack = self.rec_fourier_images[self.object_slices]
+        
+        # CHECK ME: the order of Xs and Ys
+        
+        Ys = np.array([np.arange(sl[0].start, sl[0].stop) for sl in self.pupil_slices])
+        Xs = np.array([np.arange(sl[1].start, sl[1].stop) for sl in self.pupil_slices])
+        YY = Ys[:, :, None]  
+        XX = Xs[:, None, :]
+        
+        pupil_stack = self.pupil_func[YY, XX]
+        
+        Psi = pupil_stack * object_stack 
+        
+        return Psi    
         
     
     def _compute_patch_bounds(self, kout):
@@ -124,24 +115,26 @@ class PhaseRetrievalBase(ABC):
 
         self.patch_bounds = []
         self.pupil_slices = []
-
+        self.object_slices = []
         
-        for ks_streak in self.kins:
+        tmp_kins = []
+        tmp_imgs = []
+        
+        for st_idx, (ks_streak, imgs_streak) in enumerate(zip(self.kins, self.images)):
 
-            bounds_streak = []
-            slices_streak = []
-            
-            for kout in ks_streak:
+            for kout, img in zip(ks_streak, imgs_streak):
                 
                 (lx, hx, ly, hy), (rl, rh, cl, ch) = self._compute_patch_bounds(kout)
             
-                bounds_streak.append(((lx, hx, ly, hy), (rl, rh, cl, ch)))
+                self.patch_bounds.append(((lx, hx, ly, hy), (rl, rh, cl, ch)))
 
-                slices_streak.append((slice(lx,hx), slice(ly,hy)))
-                
-            self.patch_bounds.append(bounds_streak)
-
-            self.pupil_slices.append(slices_streak)
+                self.pupil_slices.append((slice(lx,hx), slice(ly,hy)))
+                self.object_slices.append(st_idx)
+                tmp_kins.append(kout)
+                tmp_imgs.append(img)
+        
+        self.kins = np.array(tmp_kins)
+        self.images = np.array(tmp_imgs)
         
     def _upsample_coh_img(self, image, shape):
         
@@ -164,24 +157,20 @@ class PhaseRetrievalBase(ABC):
         
     def _prep_images(self):
 
-
         if type(self.images) != list:
-            
             self.images = [self.images]
-                
-
+            
         self.num_streaks = len(self.images)
 
         self.num_images = sum([img.shape[0] for img in self.images])
 
         self.img_shape = self.images[0].shape[1:]
 
-
         if type(self.kins) != list:
-            
             self.kins = [self.kins]
                     
         assert(len(self.kins) == self.num_images, 'Length of images list must match length of kins list')
+        
         
     def _initiate_recons_images(self):
 
@@ -214,7 +203,8 @@ class PhaseRetrievalBase(ABC):
             self.rec_fourier_images = [self.rec_fourier_images for _ in range(self.num_streaks)]        
             self.rec_obj_images = [self.rec_obj_images for _ in range(self.num_streaks)]
         
-
+        self.rec_fourier_images = np.array(self.rec_fourier_images)
+        self.rec_obj_images = np.array(self.rec_obj_images)
 
     
     def _load_pupil(self):

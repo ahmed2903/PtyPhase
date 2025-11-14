@@ -30,18 +30,19 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             self._update_live_plot()
             self.liveplot_init = False
         
-        step_args = self.GetKwArgs(kernel.step_single, kwargs)
+        step_args = self.GetKwArgs(kernel.step, kwargs)
                 
         for it in range(iterations):
             
             old_PSI = self.PSI.copy()
             
             # ________ Update PSI ________
-            self.PSI = kernel.step(PSI_list=self.PSI, 
-                                  objectFT_list = self.rec_fourier_images, 
+            self.PSI = kernel.step(PSI=self.PSI, 
+                                  objectFTs = self.rec_fourier_images, 
                                   pupil_func = self.pupil_func, 
-                                  slices_list=self.pupil_slices,
-                                    images_list = self.images,
+                                  pupil_slices=self.pupil_slices,
+                                  object_slices = self.object_slices,
+                                    images = self.images,
                                   n_jobs = self.num_jobs, 
                                    backend = self.backend, 
                                    pupil_coords = self.pupil_coords,
