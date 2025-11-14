@@ -56,7 +56,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             if object_steps is not None:
                 if (it % (object_steps + pupil_steps)) < object_steps:
                     self.rec_fourier_images = kernel.update_object_fts(
-                        PSI_list=self.PSI, 
+                        PSI=self.PSI, 
                         pupil=self.pupil_func, 
                         pupil_slices= self.pupil_slices,
                         object_slices=self.object_slices
@@ -66,7 +66,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 # ________ Pupil update ________
                 else:
                     self.pupil_func = kernel.update_pupil(
-                        PSI_list=self.PSI, 
+                        PSI=self.PSI, 
                         objectFT=self.rec_fourier_images, 
                         pupil_slices = self.pupil_slices,
                         pupil_func=self.pupil_func,
@@ -85,7 +85,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                         print("Zernike Update")
             else: 
                 self.rec_fourier_images = kernel.update_object_fts(
-                        PSI_list=self.PSI, 
+                        PSI=self.PSI, 
                         pupil=self.pupil_func, 
                         pupil_slices= self.pupil_slices,
                         object_slices=self.object_slices
@@ -94,7 +94,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 print('Object Update')
                 
                 self.pupil_func = kernel.update_pupil(
-                        PSI_list=self.PSI, 
+                        PSI=self.PSI, 
                         objectFT=self.rec_fourier_images, 
                         pupil_slices = self.pupil_slices,
                         pupil_func=self.pupil_func,

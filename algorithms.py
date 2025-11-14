@@ -48,7 +48,7 @@ class AlgorithmKernel:
         
     # ~~~~___________ Objects Update ___________~~~~
 
-
+    @time_it
     def update_object_fts(self, PSI, pupil, pupil_slices, object_slices):
         "Update object ft for a single set of kins"
         x,y = PSI[0].shape
