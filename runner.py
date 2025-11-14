@@ -43,9 +43,9 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                                   pupil_slices=self.pupil_slices,
                                   object_slices = self.object_slices,
                                     images = self.images,
-                                  n_jobs = self.num_jobs, 
-                                   backend = self.backend, 
-                                   pupil_coords = self.pupil_coords,
+                                  #n_jobs = self.num_jobs, 
+                                   #backend = self.backend, 
+                                   #pupil_coords = self.pupil_coords,
                                    **step_args
                                   )
 
@@ -58,7 +58,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                     self.rec_fourier_images = kernel.update_object_fts(
                         PSI_list=self.PSI, 
                         pupil=self.pupil_func, 
-                        slices_list= self.pupil_slices 
+                        pupil_slices= self.pupil_slices,
+                        object_slices=self.object_slices
                     )
                     print('Object Update')
         
@@ -66,9 +67,10 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 else:
                     self.pupil_func = kernel.update_pupil(
                         PSI_list=self.PSI, 
-                        objectFT_list=self.rec_fourier_images, 
-                        slices_list = self.pupil_slices,
-                        pupil_func=self.pupil_func, 
+                        objectFT=self.rec_fourier_images, 
+                        pupil_slices = self.pupil_slices,
+                        pupil_func=self.pupil_func,
+                        object_slices=self.object_slices, 
                         ctf=self.ctf,
                     )
                     
@@ -85,16 +87,18 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 self.rec_fourier_images = kernel.update_object_fts(
                         PSI_list=self.PSI, 
                         pupil=self.pupil_func, 
-                        slices_list= self.pupil_slices 
+                        pupil_slices= self.pupil_slices,
+                        object_slices=self.object_slices
                     )
                 
                 print('Object Update')
                 
                 self.pupil_func = kernel.update_pupil(
                         PSI_list=self.PSI, 
-                        objectFT_list=self.rec_fourier_images, 
-                        slices_list = self.pupil_slices,
-                        pupil_func=self.pupil_func, 
+                        objectFT=self.rec_fourier_images, 
+                        pupil_slices = self.pupil_slices,
+                        pupil_func=self.pupil_func,
+                        object_slices=self.object_slices, 
                         ctf=self.ctf,
                     )
                     
