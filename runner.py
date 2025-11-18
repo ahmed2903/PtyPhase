@@ -1,5 +1,7 @@
 from typing import Tuple, Sequence, Callable, Any
 import numpy as np
+import imageio.v2 as imageio
+
 from .phase_abstract import Plot, LivePlot, PhaseRetrievalBase
 from .utils_pr import *
 import inspect
@@ -13,6 +15,9 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         super().__init__(**kwargs)
 
         self.liveplot_init = True
+        self._gif_frames_amp = []
+        self._gif_frames_pha = []
+        self._gif_frames_pupil = []
         
     def solve(self, kernel: AlgorithmKernel, 
               iterations: int, 
@@ -20,6 +25,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
               pupil_steps = None, 
               zernike_steps = None,
               live_plot: bool = False,
+              save_gif: bool= False,
               **kwargs):
         
         
@@ -45,7 +51,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                                     images = self.images,
                                   #n_jobs = self.num_jobs, 
                                    #backend = self.backend, 
-                                   #pupil_coords = self.pupil_coords,
+                                   # pupil_coords = self.pupil_coords,
                                    **step_args
                                   )
 
@@ -125,9 +131,38 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 self.rec_obj_images[central_idx] = self.inverse_fft(self.rec_fourier_images[central_idx])
                 self._update_live_plot()
 
-    def _post_process(self):
+            if save_gif and self.iters_passed%20 == 0 : 
+                central_idx = self.num_streaks//2
+                self.rec_obj_images[central_idx] = self.inverse_fft(self.rec_fourier_images[central_idx])
+                # Normalization for visualization (optional but recommended)
+                frame = np.abs(self.rec_obj_images[central_idx])
+                frame = frame / frame.max()
+                frame_uint8 = (frame * 255).astype(np.uint8)
+                self._gif_frames_amp.append(frame_uint8)
+
+                # Normalization for visualization (optional but recommended)
+                phase = np.angle(self.rec_obj_images[central_idx]) 
+                phase_norm = (phase + np.pi) / (2 * np.pi)
+                phase_uint8 = (phase_norm * 255).astype(np.uint8)
+                self._gif_frames_pha.append(phase_uint8)
+
+                # Normalization for visualization (optional but recommended)
+                phase = np.angle(self.pupil_func) 
+                phase_norm = (phase + np.pi) / (2 * np.pi)
+                phase_uint8 = (phase_norm * 255).astype(np.uint8)
+                self._gif_frames_pupil.append(phase_uint8)
+            
+
+    
+
+    def _post_process(self, save_gif = False):
 
         self.rec_obj_images = [self.inverse_fft(img) for img in self.rec_fourier_images]
+
+        if save_gif: 
+            imageio.mimsave("phase_reconstruction.gif", self._gif_frames_pha, fps=10)
+            imageio.mimsave("amp_reconstruction.gif", self._gif_frames_amp, fps=10)
+            imageio.mimsave("pupil_reconstruction.gif", self._gif_frames_pupil, fps=10)
     
     def get_state(self):
         return dict(
@@ -144,7 +179,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         self.PSI = state['PSI']
         self.iters_passed = state.get('iters_passed', 0)
         self.losses = state.get('losses', [])
-    
+
+        
     # def GetKwArgs(self, obj, kwargs):
     #     obj_sigs = []
     #     obj_args = {}
@@ -178,14 +214,14 @@ class Pipeline:
         self.steps = steps
 
     
-    def run(self, live_plot=False, pupil_steps=None, object_steps=None, zernike_steps = None, **kwargs):
+    def run(self, live_plot=False, save_gif = False, pupil_steps=None, object_steps=None, zernike_steps = None, **kwargs):
         for kernel, n in self.steps:
             
             print(f"Running {kernel.__class__.__name__} for {n} iters")
             self.engine.solve(kernel, iterations=n, object_steps=object_steps, pupil_steps=pupil_steps, 
-                              zernike_steps=zernike_steps, live_plot=live_plot, **kwargs)
+                              zernike_steps=zernike_steps, live_plot=live_plot, save_gif = save_gif, **kwargs)
 
-        self.engine._post_process()
+        self.engine._post_process(save_gif=save_gif)
 
     def cycle(self, total_iterations: int, live_plot=False, pupil_steps=None, object_steps=None, zernike_steps=None):
         

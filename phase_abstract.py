@@ -136,24 +136,31 @@ class PhaseRetrievalBase(ABC):
         self.kins = np.array(tmp_kins)
         self.images = np.array(tmp_imgs)
         
-    def _upsample_coh_img(self, image, shape):
+    # def _upsample_coh_img(self, image, shape):
         
-        image_FT = self.forward_fft(image)
+    #     image_FT = self.forward_fft(image)
         
-        new_image_FT = pad_to_shape(image_FT, shape)
+    #     new_image_FT = pad_to_shape(image_FT, shape)
         
-        upsamp_img = np.abs(self.inverse_fft(new_image_FT))/ (image.shape[0]**2/new_image_FT.shape[0]**2) #Attention!!
+    #     upsamp_img = np.abs(self.inverse_fft(new_image_FT))/ (image.shape[0]**2/new_image_FT.shape[0]**2) #Attention!!
 
-        return upsamp_img
+    #     return upsamp_img
 
     @time_it
     def upsample_coherent_images(self):
+
+        fft_images =  np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(self.images, 
+                                                                   axes=(-2, -1)), axes=(-2, -1)), axes = (-2,-1))
+
+        shp = fft_images.shape[1:]
         
-        padded_images = Parallel(n_jobs=self.num_jobs, backend = self.backend)(
-        delayed(self._upsample_coh_img)(image, self.pupil_func.shape) for image in self.images
-        )
+        Nx, Ny = shp[0]//2, shp[1]//2
         
-        self.coherent_imgs_upsampled = np.array(padded_images)
+        padded_images = np.pad(fft_images, ((0,0), (Nx, Nx), (Ny, Ny)))
+
+        upsampled_imgs = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(padded_images, axes=(-2, -1)), axes=(-2, -1)), axes = (-2,-1))
+        
+        self.coherent_imgs_upsampled = upsampled_imgs
         
     def _prep_images(self):
 

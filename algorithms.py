@@ -7,8 +7,8 @@ import inspect
 fft_images = lambda imgs: np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(imgs, axes=(-2, -1)), axes=(-2, -1)), axes = (-2,-1))
 ifft_images = lambda imgs: np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(imgs, axes=(-2, -1)), axes=(-2, -1)), axes = (-2,-1))
 
-fft_2D = lambda img: np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(img)))
-ifft_2D = lambda img: np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(img)))
+# fft_2D = lambda img: np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(img)))
+# ifft_2D = lambda img: np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(img)))
 
 
 class AlgorithmKernel:
@@ -206,7 +206,7 @@ def project_Zernike( pupil_slices, object_slices, pupil, objectFTs,  pupil_coord
     
 def project_support(support, objectFTs, pupil, pupil_slices, object_slices):
     
-    objectFTnew =  fft_2D( ifft_2D(objectFTs) * support )
+    objectFTnew =  fft_images( ifft_images(objectFTs) * support )
     
     object_stack = objectFTnew[object_slices]
         
@@ -269,13 +269,11 @@ class DM(AlgorithmKernel):
 
 class DNC(AlgorithmKernel):
     
-    def __init__(self, projections: list, beta = 0.9, weights: list = [1.0,1.0,1.0,1.0]):
+    def __init__(self, beta = 0.9, weights: list = [1.0,1.0,1.0,1.0], support = None):
         
         self.beta = beta 
-        self.projections = projections
         self.weights = [w / sum(weights) for w in weights]
-        self.replicas = [None for _ in range(len(projections))] # list of PSI
-    
+        self.support = support 
     def divide(self, PSI, projections):
 
         return [proj(PSI) for proj in projections]
@@ -311,9 +309,11 @@ class DNC(AlgorithmKernel):
 
         def P_support(PSI_in):
             # 1. apply support in object domain
-            obj_supported = fft_2D(
-                ifft_2D(objectFTs) * self.support
+            self.support = np.ones_like(PSI_in[0]) 
+            obj_supported = fft_images(
+                ifft_images(objectFTs) * self.support
             )
+            
             # 2. regenerate PSI from (O,P)
             Psi_sup = project_model(
                 pupil_slices=pupil_slices,
@@ -328,7 +328,7 @@ class DNC(AlgorithmKernel):
             amp = np.abs(pupil_func)
             pha = np.angle(pupil_func)
             P_fixed = amp * np.exp(
-                1j * SquarePolynomials.project_wavefront(pha, coords=self.pupil_coords)
+                1j * SquarePolynomials.project_wavefront(pha, coords=kwargs['pupil_coords'])
             )
             Psi_z = project_model(
                 pupil_slices=pupil_slices,
@@ -338,10 +338,13 @@ class DNC(AlgorithmKernel):
             )
             return Psi_z
         
-        
+        gamma_D = 1/self.beta
+        gamma_C = -1/self.beta
         projections = [P_model, P_data, P_support, P_zernike]
-        PD = self.divide(PSI, projections)
-        PC = self.concur(PD)
+        
+        fD = (1+gamma_D) * self.divide(PSI, projections) - gamma_D * PSI
+        
+        PC = self.concur(PD, weights = self.weights)
         
         beta = self.beta
         PSI_reflect_C = 2 * PC - PSI        
@@ -349,8 +352,8 @@ class DNC(AlgorithmKernel):
 
         # DM update:
         PSI_next = PSI + beta * (
-            self.concur(self.divide(PSI_reflect_C, projections)) -
-            self.concur([project(PSI_reflect_D) for project in projections])
+            self.concur(self.divide(PSI_reflect_C, projections), weights = self.weights) -
+            self.concur([project(PSI_reflect_D) for project in projections], weights = self.weights)
         )
         
         # gamma_D = 1/(self.beta)
@@ -430,17 +433,21 @@ class RAAR(AlgorithmKernel):
         self.beta_decay = beta_decay
         
     
-    def step_single(self, slices, objectFT, pupil_func, PSI, images):
-         
-        Psi_reflection_model = 2*project_model(slices, pupil_func, objectFT) - PSI
+    def step(self,PSI, pupil_slices, object_slices,
+                    objectFTs, pupil_func, images, **kwargs):
 
-        Psi_reflection_data = 2*project_data(images, PSI) - PSI
-        # Psi_project_model = self.project_data(images, Psi_reflection_model)
-
-        average_reflections = 0.5 * (Psi_reflection_data + Psi_reflection_model)
-
+                    
         
-        Psi_n = PSI + self.beta * average_reflections #* Psi_project_model + (1-self.beta) * PSI
+        Psi_reflection_model = 2*project_model(
+                pupil_slices=pupil_slices,
+                object_slices=object_slices,
+                pupil=pupil_func,
+                objectFTs=objectFTs
+                ) - PSI
+
+        Psi_project_model = project_data(images, Psi_reflection_model)
+        
+        Psi_n = self.beta * Psi_project_model + (1-self.beta) * PSI
             
         return Psi_n
     
@@ -448,9 +455,14 @@ class RAAR(AlgorithmKernel):
 
 class AAR(AlgorithmKernel):
     
-    def step_single(self, slices, objectFT, pupil_func, PSI, images):
+    def step(self, slices, objectFT, pupil_func, PSI, images):
         
-        Psi_model = project_model(slices, pupil_func, objectFT)
+        Psi_model = project_model(
+                pupil_slices=pupil_slices,
+                object_slices=object_slices,
+                pupil=pupil_func,
+                objectFTs=objectFTs
+                )
 
         Psi_data_reflection = project_data(images, 2*Psi_model - PSI)
 
@@ -465,8 +477,14 @@ class HPR(AlgorithmKernel):
     def __init__(self, beta = 0.9):
 
         self.beta = beta
-    def step_single(self, slices, objectFT, pupil_func, PSI, images):
-        Psi_model = project_model(slices, pupil_func, objectFT)
+    def step(self, pupil_slices, object_slices, objectFTs, pupil_func, PSI, images):
+        
+        Psi_model = project_model(
+                pupil_slices=pupil_slices,
+                object_slices=object_slices,
+                pupil=pupil_func,
+                objectFTs=objectFTs
+                )
 
         Psi_data_reflection = project_data(images, 2*Psi_model - PSI)
 
@@ -480,8 +498,13 @@ class DM_PIE(AlgorithmKernel):
 
         self.alpha = alpha
 
-    def step_single(self, slices, objectFT, pupil_func, PSI, images):
-        Psi_model = project_model(slices, pupil_func, objectFT)
+    def step(self, slices, objectFT, pupil_func, PSI, images):
+        Psi_model = project_model(
+                pupil_slices=pupil_slices,
+                object_slices=object_slices,
+                pupil=pupil_func,
+                objectFTs=objectFTs
+                )
 
         Psi_reflection = (1 + self.alpha) * Psi_model - self.alpha * PSI
 
@@ -496,9 +519,14 @@ class ePIE(AlgorithmKernel):
 
         self.alpha_obj = alpha_obj
 
-    def step_single(self, slices, objectFT, pupil_func, PSI, images):
+    def step(self, slices, objectFT, pupil_func, PSI, images):
         
-        Psi_model = project_model(slices, pupil_func, objectFT)
+        Psi_model = project_model(
+                pupil_slices=pupil_slices,
+                object_slices=object_slices,
+                pupil=pupil_func,
+                objectFTs=objectFTs
+                )
 
         Psi_data = project_data(images, Psi_model)
 
