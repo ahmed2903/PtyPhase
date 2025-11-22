@@ -10,7 +10,6 @@ ifft_images = lambda imgs: np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(imgs, a
 # fft_2D = lambda img: np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(img)))
 # ifft_2D = lambda img: np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(img)))
 
-
 class AlgorithmKernel:
     """Base kernel interface for reciprocal-space phase retrieval algorithms.
 
