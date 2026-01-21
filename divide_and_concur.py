@@ -163,7 +163,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         return obj_args
 
 
-class DnCManager:
+class DnC:
     
     def __init__(self, engine: FourierPtychoEngine, projections: Sequence):
         self.engine = engine
@@ -175,7 +175,7 @@ class DnCManager:
         
     def divide_projection(self, psis):
         
-        state = np.array([proj(psi) for proj, psi in zip(self.projections, psi) ])
+        state = np.array([proj(psi) for proj, psi in zip(self.projections, psis) ])
         
         return state
     
@@ -186,22 +186,18 @@ class DnCManager:
         return avg
         
     
-    def solve_replicas(self,
-        kernel,
-        iterations,
+    def step(self,
         beta = .9,
         **kwargs):
         
+            
+        PSIs  = self.PSIs.copy()
+        f_divide = (1+1/beta) * self.divide_projection(PSIs) - 1/beta * PSIs
+        pc_o_fd = self.concur_projection(f_divide)
         
-        for it in range(iterations):
-            
-            PSIs  = self.PSIs.copy()
-            f_divide = (1+1/beta) * self.divide_projection(PSIs) - 1/beta * PSIs
-            pc_o_fd = self.concur_projection(f_divide)
-            
-            pd = self.divide_projection(PSIs) 
-            
-            self.PSIs = PSIs + beta * (pc_o_fd - pd)
+        pd = self.divide_projection(PSIs) 
+        
+        self.PSIs = PSIs + beta * (pc_o_fd - pd)
 
 
 

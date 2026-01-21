@@ -103,7 +103,7 @@ def prepare_dims(image_shp, pupil_kins, lr_psize, extend = None, band_multiplier
         ky_min -= 1.5 * range_y
         ky_max += 1.5 * range_y
         
-    elif extend == 'quintiple':
+    elif extend == 'quintuple':
         range_x = kx_max - kx_min
         range_y = ky_max - ky_min
 

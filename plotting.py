@@ -187,6 +187,63 @@ def two_lists_one_slider(img_list1, img_list2, scale_fac=0.3, vmin1 = None, vmax
 
     display(interactive_plot)  # Show slider
     #display(fig)  # Display the figure
+
+def three_lists_one_slider(img_list1, img_list2, img_list3, scale_fac=0.3, vmin1 = None, vmax1 = None, vmin2=None, vmax2=None, vmin3=None, vmax3=None, cmap1 = 'viridis', cmap2 = 'viridis'):
+    """Displays a list of coherent images and allows scrolling through them via a slider."""
+    
+
+    num_images = len(img_list1)  # Number of images in the list
+    
+    # Create a slider for selecting the image index
+    img_slider = widgets.IntSlider(min=0, max=num_images - 1, value=0, description="Image")
+
+    # Create figure & axis once
+    fig, axes = plt.subplots(1,3, figsize=(12, 4))
+    
+    # Initial image
+    im1 = axes[0].imshow(img_list1[0], vmin = vmin1, vmax = vmax1, cmap=cmap1)    
+    axes[0].set_title(f"Image 1 {0}/{num_images - 1}")
+    #axes[0].axis('off')  # Hide axes
+    plt.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
+    
+    # Plot the second image
+    im2 = axes[1].imshow(img_list2[0], vmin = vmin2, vmax = vmax2, cmap=cmap2)
+    axes[1].set_title(f"Image 1 {0}/{num_images - 1}")
+    #axes[1].axis('off')  # Hide axes
+    plt.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
+
+
+    # Plot the second image
+    im3 = axes[2].imshow(img_list2[0], vmin = vmin2, vmax = vmax2, cmap=cmap2)
+    axes[2].set_title(f"Image 1 {0}/{num_images - 1}")
+    #axes[1].axis('off')  # Hide axes
+    plt.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
+    
+    plt.tight_layout()
+    
+    def update_image(img_idx):
+        """Updates the displayed image when the slider is moved."""
+        img1 = img_list1[img_idx]
+
+        img2 = img_list2[img_idx]
+ 
+        
+        im1.set_data(img1)  # Update image data
+        im1.set_clim(vmin1, vmax1)
+
+        im2.set_data(img2)  # Update image data
+        im2.set_clim(vmin2, vmax2)
+        
+        axes[0].set_title(f"Image 1 {img_idx}/{num_images - 1}")  # Update title
+        axes[1].set_title(f"Image 2 {img_idx}/{num_images - 1}")  # Update title
+        fig.canvas.draw_idle()  # Efficient redraw
+
+    # Create interactive slider
+    interactive_plot = widgets.interactive(update_image, img_idx=img_slider)
+
+    display(interactive_plot)  # Show slider
+    #display(fig)  # Display the figure
+
 def initialize_live_plot(hr_obj_image, hr_fourier_obj):
     """
     Initializes the live plot with two subplots: one for amplitude and one for phase.
