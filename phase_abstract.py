@@ -246,8 +246,6 @@ class PhaseRetrievalBase(ABC):
         elif self.extend == None:
             factor = 1
 
-        print(dims)
-        print(phase.shape)
         scale_x = dims[0] / phase.shape[0] / factor
         scale_y = dims[1] / phase.shape[1] / factor
 
@@ -256,9 +254,7 @@ class PhaseRetrievalBase(ABC):
         
         # Calculate center indices
         N, M = round(dims[0]/factor) , round(dims[1]/factor)
-        # N,M = make_dims_even((N,M))
-        print(N,M)
-        print(scaled_pupil_phase.shape)
+
         start_x, start_y = (dims[0] - N) // 2, (dims[1] - M) // 2
         end_x, end_y = start_x + N, start_y + M
     

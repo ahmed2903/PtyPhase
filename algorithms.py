@@ -118,8 +118,8 @@ class AlgorithmKernel:
             
         pupil_func_update = numer / (denom + 1e-12)
         
-        pha = np.angle(pupil_func_update) * np.abs(ctf)
-        amp = np.abs(pupil_func_update) * np.abs(ctf)
+        pha = np.angle(pupil_func_update) #* np.abs(ctf)
+        amp = np.abs(pupil_func_update) #* np.abs(ctf)
         
         return amp * np.exp(1j * pha) #pupil_func_update #
         
