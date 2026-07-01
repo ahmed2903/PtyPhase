@@ -9,6 +9,7 @@ from IPython.display import display, clear_output
 from .zernike import SquarePolynomials
 
 from .algorithms import AlgorithmKernel
+ifft_images_z = lambda imgs: np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(imgs, axes=0), axis=0), axes = (0))
 
 class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
     def __init__(self, **kwargs):
@@ -158,12 +159,14 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
     def _post_process(self, save_gif = False):
 
         self.rec_obj_images = [self.inverse_fft(img) for img in self.rec_fourier_images]
-
+        
+        self.obj_3D = ifft_images_z(np.asarray(self.rec_obj_images))
+        
         if save_gif: 
             imageio.mimsave("phase_reconstruction.gif", self._gif_frames_pha, fps=10)
             imageio.mimsave("amp_reconstruction.gif", self._gif_frames_amp, fps=10)
             imageio.mimsave("pupil_reconstruction.gif", self._gif_frames_pupil, fps=10)
-    
+        
     def get_state(self):
         return dict(
         objectFT=self.rec_fourier_images,

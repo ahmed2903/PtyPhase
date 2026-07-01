@@ -424,19 +424,22 @@ class DNC_wSupport(AlgorithmKernel):
 
 
 class RAAR(AlgorithmKernel):
-    
+    """Non-standard RAAR variant: beta·P_D(R_M(psi)) + (1-beta)·psi.
+
+    This is a relaxed reflect-then-project step, NOT the Luke (2004) RAAR.
+    It works well in practice; see RAAR_standard for the textbook version.
+    """
+
     def __init__(self, beta = 0.9, beta_decay = None):
 
         self.beta = beta
 
         self.beta_decay = beta_decay
-        
-    
+
+
     def step(self,PSI, pupil_slices, object_slices,
                     objectFTs, pupil_func, images, **kwargs):
 
-                    
-        
         Psi_reflection_model = 2*project_model(
                 pupil_slices=pupil_slices,
                 object_slices=object_slices,
@@ -445,23 +448,77 @@ class RAAR(AlgorithmKernel):
                 ) - PSI
 
         Psi_project_model = project_data(images, Psi_reflection_model)
-        
+
         Psi_n = self.beta * Psi_project_model + (1-self.beta) * PSI
-            
+
+        return Psi_n
+
+
+class RAAR_standard(AlgorithmKernel):
+    """Standard RAAR (Luke 2004): (β/2)·(R_D(R_M(Ψ)) + Ψ) + (1-β)·P_M(Ψ).
+
+    Expanded: β·P_D(R_M(Ψ)) + β·Ψ + (1-2β)·P_M(Ψ).
+    For β→1 approaches Douglas-Rachford; for β→0 collapses to ER.
+    """
+
+    def __init__(self, beta=0.9, beta_decay=None):
+        self.beta = beta
+        self.beta_decay = beta_decay
+
+    def step(self, PSI, pupil_slices, object_slices,
+             objectFTs, pupil_func, images, **kwargs):
+
+        Psi_model = project_model(
+            pupil_slices=pupil_slices,
+            object_slices=object_slices,
+            pupil=pupil_func,
+            objectFTs=objectFTs
+        )
+
+        R_M = 2 * Psi_model - PSI                   # reflect through model set
+        P_D_RM = project_data(images, R_M)           # P_D(R_M(Ψ))
+        R_D_RM = 2 * P_D_RM - R_M                   # R_D(R_M(Ψ)) — full double reflection
+
+        Psi_n = (self.beta / 2) * (R_D_RM + PSI) + (1 - self.beta) * Psi_model
+
+        if self.beta_decay is not None:
+            self.beta *= self.beta_decay
+
         return Psi_n
     
 
 
-class AAR(AlgorithmKernel):
-    
-    def step(self, slices, objectFT, pupil_func, PSI, images):
-        
+class ER(AlgorithmKernel):
+    """Error Reduction (alternating projections): Ψ = P_D(P_M(Ψ)).
+
+    Maximally stable; slowest convergence. Useful as a baseline or to finish
+    a run started with a faster algorithm.
+    """
+
+    def step(self, PSI, pupil_slices, object_slices,
+             objectFTs, pupil_func, images, **kwargs):
+
         Psi_model = project_model(
-                pupil_slices=pupil_slices,
-                object_slices=object_slices,
-                pupil=pupil_func,
-                objectFTs=objectFTs
-                )
+            pupil_slices=pupil_slices,
+            object_slices=object_slices,
+            pupil=pupil_func,
+            objectFTs=objectFTs
+        )
+        return project_data(images, Psi_model)
+
+
+class AAR(AlgorithmKernel):
+    """Averaged project-reflect step: Ψ = (1/2)·(Ψ + P_D(R_M(Ψ)))."""
+
+    def step(self, PSI, pupil_slices, object_slices,
+             objectFTs, pupil_func, images, **kwargs):
+
+        Psi_model = project_model(
+            pupil_slices=pupil_slices,
+            object_slices=object_slices,
+            pupil=pupil_func,
+            objectFTs=objectFTs
+        )
 
         Psi_data_reflection = project_data(images, 2*Psi_model - PSI)
 
@@ -497,13 +554,15 @@ class DM_PIE(AlgorithmKernel):
 
         self.alpha = alpha
 
-    def step(self, slices, objectFT, pupil_func, PSI, images):
+    def step(self, PSI, pupil_slices, object_slices,
+             objectFTs, pupil_func, images, **kwargs):
+
         Psi_model = project_model(
-                pupil_slices=pupil_slices,
-                object_slices=object_slices,
-                pupil=pupil_func,
-                objectFTs=objectFTs
-                )
+            pupil_slices=pupil_slices,
+            object_slices=object_slices,
+            pupil=pupil_func,
+            objectFTs=objectFTs
+        )
 
         Psi_reflection = (1 + self.alpha) * Psi_model - self.alpha * PSI
 
@@ -518,14 +577,15 @@ class ePIE(AlgorithmKernel):
 
         self.alpha_obj = alpha_obj
 
-    def step(self, slices, objectFT, pupil_func, PSI, images):
-        
+    def step(self, PSI, pupil_slices, object_slices,
+             objectFTs, pupil_func, images, **kwargs):
+
         Psi_model = project_model(
-                pupil_slices=pupil_slices,
-                object_slices=object_slices,
-                pupil=pupil_func,
-                objectFTs=objectFTs
-                )
+            pupil_slices=pupil_slices,
+            object_slices=object_slices,
+            pupil=pupil_func,
+            objectFTs=objectFTs
+        )
 
         Psi_data = project_data(images, Psi_model)
 
@@ -534,8 +594,6 @@ class ePIE(AlgorithmKernel):
         return Psi_n
 
     def compute_weight_fac(self, func):
-        """Compute weighting factor for phase retrieval update."""
-        
         mod = np.abs(func) ** 2
         return np.conjugate(func) / (mod.max() + 1e-23)
   
