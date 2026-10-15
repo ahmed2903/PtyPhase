@@ -253,7 +253,7 @@ class Pipeline:
                               zernike_steps=zernike_steps, live_plot=live_plot, save_gif = save_gif, **kwargs)
 
         self.engine._post_process(save_gif=save_gif)
-
+        
     def cycle(self, total_iterations: int, live_plot=False, pupil_steps=None, object_steps=None, zernike_steps=None):
         
         iterations_done = 0
