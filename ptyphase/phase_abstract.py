@@ -29,6 +29,8 @@ class PhaseRetrievalBase(ABC):
         self.rec_obj_images = rec_obj_images
         self.rec_fourier_images = rec_fourier_images
         self.losses = []
+        self.data_misfits = []
+        self.gaps = []
         self.iters_passed = 0
         self.iter_loss = 0
 
@@ -176,7 +178,7 @@ class PhaseRetrievalBase(ABC):
         if type(self.kins) != list:
             self.kins = [self.kins]
                     
-        assert(len(self.kins) == self.num_images, 'Length of images list must match length of kins list')
+        assert len(self.kins) == self.num_images, 'Length of images list must match length of kins list'
         
         
     def _initiate_recons_images(self):
@@ -310,7 +312,9 @@ class PhaseRetrievalBase(ABC):
             # Save loss values
             losses = h5f.create_group("Losses")
             losses.create_dataset("main_loss_values", data=np.array(self.losses), compression="gzip")
-            
+            losses.create_dataset("data_misfit_values", data=np.array(self.data_misfits), compression="gzip")
+            losses.create_dataset("gap_values", data=np.array(self.gaps), compression="gzip")
+
     # ---------- Fourier Utilities ----------
     @staticmethod
     def forward_fft(x):

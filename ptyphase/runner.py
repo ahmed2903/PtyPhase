@@ -58,12 +58,15 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
 
             print('Step done')
 
+            # Exit waves to fit object/pupil to (P_D(PSI) for RAAR_standard, PSI otherwise)
+            PSI_est = kernel.solution_estimate(self.PSI, self.images)
+
 
             # ________ Object update ________
             if object_steps is not None:
                 if (it % (object_steps + pupil_steps)) < object_steps:
                     self.rec_fourier_images = kernel.update_object_fts(
-                        PSI=self.PSI, 
+                        PSI=PSI_est, 
                         pupil=self.pupil_func, 
                         pupil_slices= self.pupil_slices,
                         object_slices=self.object_slices
@@ -73,7 +76,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 # ________ Pupil update ________
                 else:
                     self.pupil_func = kernel.update_pupil(
-                        PSI=self.PSI, 
+                        PSI=PSI_est, 
                         objectFT=self.rec_fourier_images, 
                         pupil_slices = self.pupil_slices,
                         pupil_func=self.pupil_func,
@@ -92,7 +95,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                         print("Zernike Update")
             else: 
                 self.rec_fourier_images = kernel.update_object_fts(
-                        PSI=self.PSI, 
+                        PSI=PSI_est, 
                         pupil=self.pupil_func, 
                         pupil_slices= self.pupil_slices,
                         object_slices=self.object_slices
@@ -101,7 +104,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 print('Object Update')
                 
                 self.pupil_func = kernel.update_pupil(
-                        PSI=self.PSI, 
+                        PSI=PSI_est, 
                         objectFT=self.rec_fourier_images, 
                         pupil_slices = self.pupil_slices,
                         pupil_func=self.pupil_func,
@@ -124,7 +127,28 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             
             self.iter_loss = err_tot #/ max(1, self.num_images)
             self.losses.append(self.iter_loss)
-            
+
+            misfit_tot, _ = kernel.compute_data_misfit(
+                pupil_slices=self.pupil_slices,
+                object_slices=self.object_slices,
+                pupil=self.pupil_func,
+                objectFTs=self.rec_fourier_images,
+                images=self.images,
+            )
+            self.data_misfits.append(misfit_tot)
+
+            gap = kernel.compute_gap(
+                PSI=self.PSI,
+                pupil_slices=self.pupil_slices,
+                object_slices=self.object_slices,
+                pupil=self.pupil_func,
+                images=self.images,
+            )
+            self.gaps.append(gap)
+
+            print(f"Iter {self.iters_passed}: step change = {err_tot:.4e}, "
+                  f"data misfit = {misfit_tot:.4e}, gap = {gap:.4e}")
+
             self.iters_passed += 1
 
             if live_plot:
@@ -173,7 +197,9 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         pupil=self.pupil_func,
         PSI=self.PSI,
         iters_passed=self.iters_passed,
-        losses=self.losses
+        losses=self.losses,
+        data_misfits=self.data_misfits,
+        gaps=self.gaps
         )
 
     def set_state(self, state: dict):
@@ -182,6 +208,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         self.PSI = state['PSI']
         self.iters_passed = state.get('iters_passed', 0)
         self.losses = state.get('losses', [])
+        self.data_misfits = state.get('data_misfits', [])
+        self.gaps = state.get('gaps', [])
 
         
     # def GetKwArgs(self, obj, kwargs):

@@ -137,9 +137,35 @@ class AlgorithmKernel:
             errors.append(err)
             
         total_error = np.mean(errors)
-        
+
         return total_error, errors
-    
+
+    def compute_data_misfit(self, pupil_slices, object_slices, pupil, objectFTs, images):
+        """Amplitude misfit of the current model P*O against the data:
+            E = sum_j || |ifft(P_j O_c(j))| - sqrt(I_j) ||^2 / sum_j I_j
+        Uses the model (object + pupil), not the iterate PSI."""
+        psi_model = ifft_images(project_model(pupil_slices, object_slices, pupil, objectFTs))
+        amp_data = np.sqrt(images)
+        err_per_image = np.sum((np.abs(psi_model) - amp_data)**2, axis=(-2, -1))
+        total_error = np.sum(err_per_image) / np.sum(images)
+        return total_error, err_per_image / np.sum(images, axis=(-2, -1))
+
+    def compute_gap(self, PSI, pupil_slices, object_slices, pupil, images):
+        """Gap between the two constraint sets at the iterate PSI:
+            gap = || P_D(PSI) - P_M(PSI) || / || PSI ||
+        P_M fits the objects to PSI with the pupil held fixed (the exact
+        projection onto {P*O} for that pupil), then re-evaluates P*O."""
+        objectFTs_fit = self.update_object_fts(PSI, pupil, pupil_slices, object_slices)
+        Psi_M = project_model(pupil_slices, object_slices, pupil, objectFTs_fit)
+        Psi_D = project_data(images, PSI)
+        return np.linalg.norm(Psi_D - Psi_M) / np.linalg.norm(PSI)
+
+    def solution_estimate(self, PSI, images):
+        """Exit waves the object/pupil should be fitted to after a step.
+        The iterate itself by default; kernels whose solution lives in a
+        projection of the iterate (e.g. RAAR_standard -> P_D(Ψ)) override."""
+        return PSI
+
     def GetKwArgs(self, obj, kwargs):
         obj_sigs = list(inspect.signature(obj).parameters.keys())
         obj_args = {k: v for k, v in kwargs.items() if k in obj_sigs}
@@ -455,36 +481,49 @@ class RAAR(AlgorithmKernel):
 
 
 class RAAR_standard(AlgorithmKernel):
-    """Standard RAAR (Luke 2004): (β/2)·(R_D(R_M(Ψ)) + Ψ) + (1-β)·P_M(Ψ).
+    """Standard RAAR (Luke 2004), with the data (modulus) set D as the inner
+    set and the model set M = {P*O} as the outer one:
 
-    Expanded: β·P_D(R_M(Ψ)) + β·Ψ + (1-2β)·P_M(Ψ).
-    For β→1 approaches Douglas-Rachford; for β→0 collapses to ER.
+        Ψ_{n+1} = (β/2)·(R_M(R_D(Ψ)) + Ψ) + (1-β)·P_D(Ψ)
+                = β·Ψ + β·P_M(R_D(Ψ)) + (1-2β)·P_D(Ψ)
+
+    β = 1 is Douglas-Rachford (Fienup HIO with β = 1). P_M is the exact
+    projection for the current pupil: the objects are refitted to R_D(Ψ)
+    inside the step. The solution is read from P_D(Ψ), so the engine fits
+    object/pupil to `solution_estimate(Ψ)` rather than to the iterate.
+
+    beta_decay multiplies β every step, but never below beta_min: as β→0
+    the update collapses to Ψ = P_D(Ψ) and stops making progress.
     """
 
-    def __init__(self, beta=0.9, beta_decay=None):
+    def __init__(self, beta=0.9, beta_decay=None, beta_min=0.5):
         self.beta = beta
         self.beta_decay = beta_decay
+        self.beta_min = beta_min
 
     def step(self, PSI, pupil_slices, object_slices,
              objectFTs, pupil_func, images, **kwargs):
 
-        Psi_model = project_model(
+        Psi_data = project_data(images, PSI)           # P_D(Ψ)
+        R_D = 2 * Psi_data - PSI                       # R_D(Ψ)
+
+        objectFTs_fit = self.update_object_fts(R_D, pupil_func, pupil_slices, object_slices)
+        P_M_RD = project_model(
             pupil_slices=pupil_slices,
             object_slices=object_slices,
             pupil=pupil_func,
-            objectFTs=objectFTs
-        )
+            objectFTs=objectFTs_fit
+        )                                              # P_M(R_D(Ψ))
 
-        R_M = 2 * Psi_model - PSI                   # reflect through model set
-        P_D_RM = project_data(images, R_M)           # P_D(R_M(Ψ))
-        R_D_RM = 2 * P_D_RM - R_M                   # R_D(R_M(Ψ)) — full double reflection
-
-        Psi_n = (self.beta / 2) * (R_D_RM + PSI) + (1 - self.beta) * Psi_model
+        Psi_n = self.beta * PSI + self.beta * P_M_RD + (1 - 2 * self.beta) * Psi_data
 
         if self.beta_decay is not None:
-            self.beta *= self.beta_decay
+            self.beta = max(self.beta * self.beta_decay, self.beta_min)
 
         return Psi_n
+
+    def solution_estimate(self, PSI, images):
+        return project_data(images, PSI)
     
 
 
