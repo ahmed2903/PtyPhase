@@ -149,21 +149,21 @@ class LivePlot:
         axes = [[ax_amp, ax_phase], [ax_fourier, ax_pupil], ax_loss]
         
         # Initialize the plots with the initial image
-        img_amp = ax_amp.imshow(np.abs(self.hr_obj_image), cmap='viridis')
+        img_amp = ax_amp.imshow(np.abs(self.hr_obj_image), cmap='viridis', origin='lower')
         ax_amp.set_title("Object Amplitude")
         cbar_amp = plt.colorbar(img_amp, ax=ax_amp)
         
-        img_phase = ax_phase.imshow(np.angle(self.hr_obj_image), cmap='viridis')
+        img_phase = ax_phase.imshow(np.angle(self.hr_obj_image), cmap='viridis', origin='lower')
         ax_phase.set_title("Object Phase")
         img_phase.set_clim(-np.pi, np.pi)
         cbar_phase = plt.colorbar(img_phase, ax=ax_phase)
         
-        fourier_amp = ax_fourier.imshow(np.log1p(np.abs(self.hr_fourier_image)), cmap='viridis')
+        fourier_amp = ax_fourier.imshow(np.log1p(np.abs(self.hr_fourier_image)), cmap='viridis', origin='lower')
         ax_fourier.set_title("Fourier Amplitude")
         cbar_fourier = plt.colorbar(fourier_amp, ax=ax_fourier)
         
         # Hide the extra subplot or use it for something else
-        pupil_phase = ax_pupil.imshow(np.angle(self.pupil_func), cmap='viridis')
+        pupil_phase = ax_pupil.imshow(np.angle(self.pupil_func), cmap='viridis', origin='lower')
         ax_pupil.set_title("Pupil Phase")
         pupil_phase.set_clim(-np.pi, np.pi)
         cbar_pupil = plt.colorbar(pupil_phase, ax=ax_pupil)

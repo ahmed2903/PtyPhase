@@ -30,9 +30,9 @@ def load_reconstructed_data(h5_filepath, mode):
         
     
     fig, ax = plt.subplots(1,2, figsize=(8,8))
-    ax1 = ax[0].imshow(amplitude)
+    ax1 = ax[0].imshow(amplitude, origin='lower')
     ax[0].set_title(f"{mode.capitalize()} Amplitude")
-    ax2 = ax[0].imshow(ogase)
+    ax2 = ax[0].imshow(ogase, origin='lower')
     ax[1].set_title(f"{mode.capitalize()} Phase")
     
     
@@ -78,7 +78,7 @@ def plot_roi_from_numpy(array, roi=None, title='Plot', vmin=None, vmax=None, sav
         vmax = me + 0.5 *me
         
     plt.figure()
-    plt.imshow(data_roi, vmin = vmin, vmax = vmax,cmap=cmap)
+    plt.imshow(data_roi, vmin = vmin, vmax = vmax,cmap=cmap, origin='lower')
     plt.title(title)
     plt.colorbar()
     plt.show()
@@ -121,13 +121,13 @@ def plot_images_side_by_side(image1, image2,
         vmax2 = me + 0.5 *me
     
     # Plot the first image
-    im1 = axes[0].imshow(image1, vmin = vmin1, vmax = vmax1, cmap=cmap1)    
+    im1 = axes[0].imshow(image1, vmin = vmin1, vmax = vmax1, cmap=cmap1, origin='lower')    
     axes[0].set_title(title1)
     #axes[0].axis('off')  # Hide axes
     plt.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
     
     # Plot the second image
-    im2 = axes[1].imshow(image2, vmin = vmin2, vmax = vmax2, cmap=cmap2)
+    im2 = axes[1].imshow(image2, vmin = vmin2, vmax = vmax2, cmap=cmap2, origin='lower')
     axes[1].set_title(title2)
     #axes[1].axis('off')  # Hide axes
     plt.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
@@ -152,13 +152,13 @@ def two_lists_one_slider(img_list1, img_list2, scale_fac=0.3, vmin1 = None, vmax
     fig, axes = plt.subplots(1,2, figsize=(10, 5))
     
     # Initial image
-    im1 = axes[0].imshow(img_list1[0], vmin = vmin1, vmax = vmax1, cmap=cmap1)    
+    im1 = axes[0].imshow(img_list1[0], vmin = vmin1, vmax = vmax1, cmap=cmap1, origin='lower')    
     axes[0].set_title(f"Image 1 {0}/{num_images - 1}")
     #axes[0].axis('off')  # Hide axes
     plt.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
     
     # Plot the second image
-    im2 = axes[1].imshow(img_list2[0], vmin = vmin2, vmax = vmax2, cmap=cmap2)
+    im2 = axes[1].imshow(img_list2[0], vmin = vmin2, vmax = vmax2, cmap=cmap2, origin='lower')
     axes[1].set_title(f"Image 1 {0}/{num_images - 1}")
     #axes[1].axis('off')  # Hide axes
     plt.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
@@ -201,20 +201,20 @@ def three_lists_one_slider(img_list1, img_list2, img_list3, scale_fac=0.3, vmin1
     fig, axes = plt.subplots(1,3, figsize=(12, 4))
     
     # Initial image
-    im1 = axes[0].imshow(img_list1[0], vmin = vmin1, vmax = vmax1, cmap=cmap1)    
+    im1 = axes[0].imshow(img_list1[0], vmin = vmin1, vmax = vmax1, cmap=cmap1, origin='lower')    
     axes[0].set_title(f"Image 1 {0}/{num_images - 1}")
     #axes[0].axis('off')  # Hide axes
     plt.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
     
     # Plot the second image
-    im2 = axes[1].imshow(img_list2[0], vmin = vmin2, vmax = vmax2, cmap=cmap2)
+    im2 = axes[1].imshow(img_list2[0], vmin = vmin2, vmax = vmax2, cmap=cmap2, origin='lower')
     axes[1].set_title(f"Image 1 {0}/{num_images - 1}")
     #axes[1].axis('off')  # Hide axes
     plt.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
 
 
     # Plot the second image
-    im3 = axes[2].imshow(img_list2[0], vmin = vmin2, vmax = vmax2, cmap=cmap2)
+    im3 = axes[2].imshow(img_list2[0], vmin = vmin2, vmax = vmax2, cmap=cmap2, origin='lower')
     axes[2].set_title(f"Image 1 {0}/{num_images - 1}")
     #axes[1].axis('off')  # Hide axes
     plt.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
@@ -257,11 +257,11 @@ def initialize_live_plot(hr_obj_image, hr_fourier_obj):
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
             
     # Initialize the plots with the initial image
-    img_amp = axes[0].imshow(np.abs(hr_obj_image), vmin =.2, vmax = 1, cmap='viridis')
+    img_amp = axes[0].imshow(np.abs(hr_obj_image), vmin =.2, vmax = 1, cmap='viridis', origin='lower')
     axes[0].set_title("Object Object")
     cbar_amp = plt.colorbar(img_amp, ax=axes[0])
 
-    img_phase = axes[1].imshow(np.abs(hr_fourier_obj), cmap='viridis')
+    img_phase = axes[1].imshow(np.abs(hr_fourier_obj), cmap='viridis', origin='lower')
     axes[1].set_title("Fourier Amplitude")
     cbar_phase = plt.colorbar(img_phase, ax=axes[1])
 
@@ -316,7 +316,7 @@ def plot_list_slider(img_list, scale_fac=0.3, vmin1 = None, vmax1 = None):
     
     # Initial image
     vmin, vmax = np.min(img_list[0]), np.max(img_list[0])  # Normalize color scale
-    im = ax.imshow(img_list[0], cmap='viridis', vmin=vmin1, vmax=vmax1)
+    im = ax.imshow(img_list[0], cmap='viridis', vmin=vmin1, vmax=vmax1, origin='lower')
     ax.set_title(f"Image {0}/{num_images - 1}")
     plt.colorbar(im, ax=ax, label="Intensity")
     plt.tight_layout()

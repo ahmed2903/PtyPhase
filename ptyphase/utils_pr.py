@@ -44,11 +44,22 @@ def reconstruction_repeats(recon_class, iterations, fname, repeats = 5,  n_jobs=
     
 
     
+def split_psize(lr_psize):
+    """Return the (row, col) scan step sizes from a scalar or a (row, col) pair.
+
+    Rows of the coherent images are scan_y and columns are scan_x, so a pair is
+    (step_size_y, step_size_x). Signs are dropped: a motor scanned from high to
+    low positions still has a positive step.
+    """
+    psize_x, psize_y = np.abs(np.broadcast_to(np.asarray(lr_psize, dtype=float), (2,)))
+    return psize_x, psize_y
+
 def calc_obj_freq_bandwidth(lr_psize):
     """
     Calculate the Object bandwidth based on the step size in scanning mode.  
     """
-    omega_obj_x, omega_obj_y = 2 * np.pi / lr_psize, 2 * np.pi / lr_psize
+    psize_x, psize_y = split_psize(lr_psize)
+    omega_obj_x, omega_obj_y = 2 * np.pi / psize_x, 2 * np.pi / psize_y
 
     return omega_obj_x, omega_obj_y
 
@@ -67,7 +78,8 @@ def prepare_dims(image_shp, pupil_kins, lr_psize, extend = None, band_multiplier
     nx_lr, ny_lr = image_shp
 
     # Object size == Scan length
-    Lx, Ly = image_shp[0] * lr_psize, image_shp[1] * lr_psize
+    psize_x, psize_y = split_psize(lr_psize)
+    Lx, Ly = image_shp[0] * psize_x, image_shp[1] * psize_y
 
     # High-resolution Fourier pixel size 
     dkx, dky = 2 * np.pi / Lx, 2 * np.pi / Ly

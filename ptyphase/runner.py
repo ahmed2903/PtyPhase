@@ -185,6 +185,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         self.rec_obj_images = [self.inverse_fft(img) for img in self.rec_fourier_images]
         
         self.obj_3D = ifft_images_z(np.asarray(self.rec_obj_images))
+        obj3D = np.pad(self.obj_3D, ((1, 1), (1, 1), (1, 1)))
         
         if save_gif: 
             imageio.mimsave("phase_reconstruction.gif", self._gif_frames_pha, fps=10)
