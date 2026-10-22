@@ -48,23 +48,32 @@ class AlgorithmKernel:
     # ~~~~___________ Objects Update ___________~~~~
 
     @time_it
-    def update_object_fts(self, PSI, pupil, pupil_slices, object_slices):
-        "Update object ft for a single set of kins"
+    def update_object_fts(self, PSI, pupil, pupil_slices, object_slices, objectFTs=None, eps=1e-6):
+        """LSQ object spectra for a fixed pupil (the projection onto {P*O}):
+
+            O = (sum conj(P) psi + mu O_prev) / (sum |P|^2 + mu),  mu = eps * max(sum |P|^2)
+
+        mu is relative, so it does not depend on the free P/O scale. Poorly
+        constrained pixels keep O_prev (0 if objectFTs is None) instead of
+        blowing up as psi/P; well-constrained ones are effectively exact."""
         x,y = PSI[0].shape
         n = max(object_slices)+1
-        
+
         denom = np.zeros((n,x,y), dtype=np.float64)
         numer = np.zeros((n,x,y), dtype=np.complex128)
-    
+
         for pup_sl, obj_sl, psi_i in zip(pupil_slices, object_slices, PSI):
-            
+
             pupil_patch = pupil[pup_sl]
-            
+
             denom[obj_sl] += np.abs(pupil_patch)**2
-            
+
             numer[obj_sl] += np.conjugate(pupil_patch) * psi_i
-        
-        return numer / (denom + 1e-12)
+
+        mu = eps * denom.max() + 1e-30
+        if objectFTs is not None:
+            numer += mu * objectFTs
+        return numer / (denom + mu)
 
     # @time_it
     # def update_object_fts(self, PSI_list, pupil, slices_list):
@@ -103,25 +112,26 @@ class AlgorithmKernel:
         
     #     return  amp * np.exp(1j * pha) 
     @time_it
-    def update_pupil(self, PSI, objectFT, pupil_slices, object_slices, pupil_func, ctf):
-        
+    def update_pupil(self, PSI, objectFT, pupil_slices, object_slices, pupil_func, ctf=None, eps=1e-3):
+        """LSQ pupil for fixed objects; pixels with little object power keep
+        their previous value (mu = eps * max denom). Zero outside the aperture
+        `ctf` if given."""
         pupil_shape = pupil_func.shape
         denom = np.zeros(pupil_shape, dtype=np.float64)
         numer = np.zeros(pupil_shape, dtype=np.complex128)
-    
-        # Pre-allocate output buffers
+
         for pup_sl, obj_sl, psi_i in zip(pupil_slices, object_slices, PSI):
 
-    
             denom[pup_sl] += np.abs(objectFT[obj_sl])**2
-            numer[pup_sl] += np.conjugate(objectFT[obj_sl]) * psi_i #* np.abs(ctf[lx:hx, ly:hy])
-            
-        pupil_func_update = numer / (denom + 1e-12)
-        
-        pha = np.angle(pupil_func_update) #* np.abs(ctf)
-        amp = np.abs(pupil_func_update) #* np.abs(ctf)
-        
-        return amp * np.exp(1j * pha) #pupil_func_update #
+            numer[pup_sl] += np.conjugate(objectFT[obj_sl]) * psi_i
+
+        mu = eps * denom.max() + 1e-30
+        pupil_func_update = (numer + mu * pupil_func) / (denom + mu)
+
+        if ctf is not None:
+            pupil_func_update = pupil_func_update * (np.abs(ctf) > 0)
+
+        return pupil_func_update
         
     
     
@@ -133,10 +143,13 @@ class AlgorithmKernel:
         errors = []
         
         for old_psi, new_psi in zip(old_psi_list, new_psi_list):
-            err = np.linalg.norm(new_psi - old_psi) / np.linalg.norm(old_psi)
+            norm_old = np.linalg.norm(old_psi)
+            if norm_old == 0:      # all-zero (padding) image: skip
+                continue
+            err = np.linalg.norm(new_psi - old_psi) / norm_old
             errors.append(err)
-            
-        total_error = np.mean(errors)
+
+        total_error = np.mean(errors) if errors else 0.0
 
         return total_error, errors
 
@@ -155,8 +168,7 @@ class AlgorithmKernel:
             gap = || P_D(PSI) - P_M(PSI) || / || PSI ||
         P_M fits the objects to PSI with the pupil held fixed (the exact
         projection onto {P*O} for that pupil), then re-evaluates P*O."""
-        objectFTs_fit = self.update_object_fts(PSI, pupil, pupil_slices, object_slices)
-        Psi_M = project_model(pupil_slices, object_slices, pupil, objectFTs_fit)
+        Psi_M, _ = project_model_fit(self, PSI, pupil_slices, object_slices, pupil)
         Psi_D = project_data(images, PSI)
         return np.linalg.norm(Psi_D - Psi_M) / np.linalg.norm(PSI)
 
@@ -199,10 +211,18 @@ def project_model(pupil_slices, object_slices, pupil, objectFTs):
     
     pupil_stack = pupil[YY, XX]
     
-    Psi = pupil_stack * object_stack 
-    
-    return Psi 
-    
+    Psi = pupil_stack * object_stack
+
+    return Psi
+
+
+def project_model_fit(kernel, PSI, pupil_slices, object_slices, pupil, objectFTs=None):
+    """P_M(PSI) for a fixed pupil: refit the objects to PSI, then re-predict.
+    Exact projection onto {P*O} (up to the small Tikhonov term in
+    update_object_fts). Returns (Psi_M, objectFTs_fit)."""
+    objectFTs_fit = kernel.update_object_fts(PSI, pupil, pupil_slices, object_slices,
+                                             objectFTs=objectFTs)
+    return project_model(pupil_slices, object_slices, pupil, objectFTs_fit), objectFTs_fit
 
 
 def project_Zernike( pupil_slices, object_slices, pupil, objectFTs,  pupil_coords):
@@ -250,12 +270,32 @@ def project_support(support, objectFTs, pupil, pupil_slices, object_slices):
 # ~~~___________________ Algorithms ___________________~~~
 
 class DM(AlgorithmKernel):
-    def __init__(self, beta = 1.0, beta_decay = None):
+    """Difference Map (Thibault 2008), relaxed:
+
+        Ψ <- Ψ + β [ P_D(2 P_M Ψ - Ψ) - P_M Ψ ]  =  (1-β) Ψ + β T_DM(Ψ)
+
+    β only shortens the step; the fixed points are those of β = 1. P_M refits
+    the objects to Ψ inside the step (exact projection for the current pupil).
+
+    estimate : what the engine fits object/pupil to after the step.
+        'data'  -> the shadow P_D(2 P_M Ψ - Ψ). It lies on the data set
+                   (|ψ| = sqrt(I)), so it cannot drift when the sets do not
+                   intersect, and equals P_M Ψ at a fixed point.
+        'model' -> the iterate Ψ itself (fitting to it gives P_M Ψ, Thibault's
+                   read-out); Ψ drifts for inconsistent data.
+    """
+    def __init__(self, beta = 1.0, beta_decay = None, beta_min = 0.5, estimate = 'data'):
 
         self.beta = beta
 
         self.beta_decay = beta_decay
-        
+        self.beta_min = beta_min
+
+        if estimate not in ('data', 'model'):
+            raise ValueError("estimate must be 'data' or 'model'")
+        self.estimate = estimate
+        self._shadow = None
+
     # def step_single(self, slices, objectFT, pupil_func, PSI, images):
         
     #     Psi_model = project_model(slices, pupil_func, objectFT)
@@ -272,22 +312,26 @@ class DM(AlgorithmKernel):
     #     return Psi_n
 
     def step(self, pupil_slices, object_slices, objectFTs, pupil_func, PSI, images):
-        
-        Psi_model = project_model(pupil_slices = pupil_slices, 
-                                  object_slices=object_slices, 
-                                  objectFTs=objectFTs, 
-                                  pupil=pupil_func)
-        
+
+        Psi_model, _ = project_model_fit(self, PSI, pupil_slices, object_slices,
+                                         pupil_func, objectFTs)   # P_M(Ψ)
+
         Psi_reflection = 2 * Psi_model - PSI
-        
+
         Psi_data_reflection = project_data(images=images, Psi=Psi_reflection)
+        self._shadow = Psi_data_reflection
 
         Psi_n = PSI + self.beta * (Psi_data_reflection - Psi_model)
-        
+
         if self.beta_decay is not None:
-            self.beta *= self.beta_decay
-            
+            self.beta = max(self.beta * self.beta_decay, self.beta_min)
+
         return Psi_n
+
+    def solution_estimate(self, PSI, images):
+        if self.estimate == 'data' and self._shadow is not None:
+            return self._shadow
+        return PSI
     
 
         
@@ -507,13 +551,8 @@ class RAAR_standard(AlgorithmKernel):
         Psi_data = project_data(images, PSI)           # P_D(Ψ)
         R_D = 2 * Psi_data - PSI                       # R_D(Ψ)
 
-        objectFTs_fit = self.update_object_fts(R_D, pupil_func, pupil_slices, object_slices)
-        P_M_RD = project_model(
-            pupil_slices=pupil_slices,
-            object_slices=object_slices,
-            pupil=pupil_func,
-            objectFTs=objectFTs_fit
-        )                                              # P_M(R_D(Ψ))
+        P_M_RD, _ = project_model_fit(self, R_D, pupil_slices, object_slices,
+                                      pupil_func, objectFTs)   # P_M(R_D(Ψ))
 
         Psi_n = self.beta * PSI + self.beta * P_M_RD + (1 - 2 * self.beta) * Psi_data
 

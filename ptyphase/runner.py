@@ -9,6 +9,7 @@ from IPython.display import display, clear_output
 from .zernike import SquarePolynomials
 
 from .algorithms import AlgorithmKernel
+from .algorithms_3d import normalise_pupil_scale
 ifft_images_z = lambda imgs: np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(imgs, axes=0), axis=0), axes = (0))
 
 class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
@@ -27,8 +28,14 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
               zernike_steps = None,
               live_plot: bool = False,
               save_gif: bool= False,
+              constrain_pupil: bool = True,
+              normalise_pupil: bool = True,
               **kwargs):
-        
+        """
+        constrain_pupil : keep the pupil zero outside the aperture (ctf).
+        normalise_pupil : after each pupil update rescale P -> P/c, O -> O·c so that
+            rms|P| = 1 on the covered pupil (removes the free P/O scale drift).
+        """
         
         if live_plot and self.liveplot_init:
             
@@ -38,6 +45,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             self.liveplot_init = False
         
         step_args = self.GetKwArgs(kernel.step, kwargs)
+        ctf = self.ctf if constrain_pupil else None
+        cover = self.pupil_cover_mask()
                 
         for it in range(iterations):
             
@@ -69,7 +78,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                         PSI=PSI_est, 
                         pupil=self.pupil_func, 
                         pupil_slices= self.pupil_slices,
-                        object_slices=self.object_slices
+                        object_slices=self.object_slices,
+                        objectFTs=self.rec_fourier_images,
                     )
                     print('Object Update')
         
@@ -81,9 +91,12 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                         pupil_slices = self.pupil_slices,
                         pupil_func=self.pupil_func,
                         object_slices=self.object_slices, 
-                        ctf=self.ctf,
+                        ctf=ctf,
                     )
                     
+                    if normalise_pupil:
+                        self.pupil_func, self.rec_fourier_images = normalise_pupil_scale(
+                            self.pupil_func, self.rec_fourier_images, cover)
                     print('Pupil Update')
                     
                     if zernike_steps is not None and it % zernike_steps == 0 :
@@ -98,7 +111,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                         PSI=PSI_est, 
                         pupil=self.pupil_func, 
                         pupil_slices= self.pupil_slices,
-                        object_slices=self.object_slices
+                        object_slices=self.object_slices,
+                        objectFTs=self.rec_fourier_images,
                     )
                 
                 print('Object Update')
@@ -109,9 +123,12 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                         pupil_slices = self.pupil_slices,
                         pupil_func=self.pupil_func,
                         object_slices=self.object_slices, 
-                        ctf=self.ctf,
+                        ctf=ctf,
                     )
                     
+                if normalise_pupil:
+                    self.pupil_func, self.rec_fourier_images = normalise_pupil_scale(
+                        self.pupil_func, self.rec_fourier_images, cover)
                 print('Pupil Update')
                     
                 if zernike_steps is not None and it % zernike_steps == 0 :
@@ -179,6 +196,15 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             
 
     
+
+    def pupil_cover_mask(self):
+        """Bool mask of the pupil pixels the data constrains (inside the aperture)."""
+        if getattr(self, "pupil_cover", None) is None:
+            cover = np.zeros(self.pupil_func.shape, dtype=bool)
+            for sl in self.pupil_slices:
+                cover[sl] = True
+            self.pupil_cover = cover & (np.abs(self.ctf) > 0)
+        return self.pupil_cover
 
     def _post_process(self, save_gif = False):
 
