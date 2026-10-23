@@ -57,7 +57,8 @@ class AlgorithmKernel:
         constrained pixels keep O_prev (0 if objectFTs is None) instead of
         blowing up as psi/P; well-constrained ones are effectively exact."""
         x,y = PSI[0].shape
-        n = max(object_slices)+1
+        # all streaks, including trailing ones without images
+        n = len(objectFTs) if objectFTs is not None else max(object_slices)+1
 
         denom = np.zeros((n,x,y), dtype=np.float64)
         numer = np.zeros((n,x,y), dtype=np.complex128)

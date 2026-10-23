@@ -63,10 +63,15 @@ class EwaldSupportMixin:
     geom = None
 
     def update_object_fts(self, PSI, pupil, pupil_slices, object_slices, objectFTs=None, eps=1e-6):
+        if self.geom is None:
+            return super().update_object_fts(PSI, pupil, pupil_slices, object_slices,
+                                             objectFTs=objectFTs, eps=eps)
+        if objectFTs is None:
+            # same as no previous estimate (O_prev = 0), but sized to all streaks,
+            # including trailing ones without images
+            objectFTs = np.zeros(self.geom.obj_shape, dtype=complex)
         O = super().update_object_fts(PSI, pupil, pupil_slices, object_slices,
                                       objectFTs=objectFTs, eps=eps)
-        if self.geom is None:
-            return O
         return project_support_3d(self.geom, O)
 
 
