@@ -102,17 +102,24 @@ class PhaseRetrievalEwaldBase(PhaseRetrievalBase):
               f"z FOV={Nz*self.dz:.0f} nm | curvature {'on' if curvature else 'off'}, "
               f"max c(K) = {curv.max():.3e} rad/nm = {curv.max()/self.dqz:.3f} dqz")
 
-    def save_reconsturction(self, file_path, metadata={}):
+    def save_reconsturction(self, file_path, metadata={}, pad=1):
+        """pad : zero voxels added on every side of the saved 3D object and support."""
         from .algorithms_ewald import slices_to_object
 
         super().save_reconsturction(file_path, metadata)
-        obj = slices_to_object(self.geom, self.rec_fourier_images)
+        obj = np.pad(slices_to_object(self.geom, self.rec_fourier_images), pad)
         with h5py.File(file_path, "a") as h5f:
-            rec = h5f["Reconstructed_data"]
-            rec.create_dataset("Object_3D_amplitude", data=np.abs(obj), compression="gzip")
-            rec.create_dataset("Object_3D_phase", data=np.angle(obj), compression="gzip")
+            # Reconstructed_data holds the per-slice quantities [qz, ...]; the real-space
+            # 3D object [z, x, y] and its support live here
+            rec = h5f.create_group("Reconstructed_3D")
+            rec.create_dataset("Object_amplitude", data=np.abs(obj), compression="gzip")
+            rec.create_dataset("Object_phase", data=np.angle(obj), compression="gzip")
             if self.geom.support is not None:
-                rec.create_dataset("Support", data=self.geom.support, compression="gzip")
+                rec.create_dataset("Support", data=np.pad(self.geom.support, pad), compression="gzip")
+            rec.create_dataset("voxel_size", data=np.array([self.dz, *split_psize(self.lr_psize)]))
+            rec.attrs["pad"] = pad
+            rec.attrs["layout"] = (f"[z, x, y], zero-padded by {pad} voxel(s) on every side (Axes/ hold the "
+                                   f"unpadded axes); voxel_size (dz, dx, dy) in nm, x = image rows (scan_y)")
             ax = h5f.create_group("Axes")
             ax.create_dataset("qz_rad_nm_inv", data=self.geom.qz_axis)
             ax.create_dataset("z_nm", data=self.geom.z_axis)

@@ -394,6 +394,8 @@ def main():
         'init': args.init,
         'seed': str(args.seed),
         'G': G,
+        'det_distance_nm': roi.det_distance,
+        'delta_q': roi.delta_q,
     }
 
     out_dir = Path(args.outdir)
@@ -404,24 +406,9 @@ def main():
     engine._post_process()
     engine.save_reconsturction(save_path + ".h5", metadata=meta)
     with h5py.File(save_path + ".h5", "a") as f:
-        f["Reconstructed_data"].create_dataset("images_per_streak", data=counts)
+        f["Recon_Params"].create_dataset("images_per_streak", data=counts)
 
-    obj3D = np.pad(engine.obj_3D, ((1, 1), (1, 1), (1, 1)))
-    with h5py.File(save_path + "obj3d.h5", "w") as f:
-        grp = f.create_group("data")
-        grp.create_dataset("voxel_size", data=np.array([engine.dz, roi.step_size_y, roi.step_size_x]))  # (z, scan_y, scan_x)
-        grp.create_dataset("array", data=obj3D)
-        grp.create_dataset("parent", data=str(data_path))
-
-        grp = f.create_group("meta")
-        grp.create_dataset("distance_cm", data=roi.det_distance * 1e-7)
-        grp.create_dataset("step_xy_nm", data=roi.step_size_x)
-        grp.create_dataset("delta_q_inv_nm", data=roi.delta_q)
-        grp.create_dataset("dqz_inv_nm", data=dqz)
-        grp.create_dataset("qz_offset_inv_nm", data=qz_offset)
-        grp.create_dataset("G_inv_nm", data=G)
-
-    print(f"Saved {save_path}.h5 and {save_path}obj3d.h5")
+    print(f"Saved {save_path}.h5")
 
 
 if __name__ == '__main__':
