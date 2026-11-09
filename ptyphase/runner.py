@@ -8,8 +8,7 @@ import inspect
 from IPython.display import display, clear_output
 from .zernike import SquarePolynomials
 
-from .algorithms import AlgorithmKernel
-from .algorithms_3d import normalise_pupil_scale
+from .algorithms import AlgorithmKernel, project_model_fit, normalise_pupil_scale
 ifft_images_z = lambda imgs: np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(imgs, axes=0), axis=0), axes = (0))
 
 class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
@@ -30,15 +29,34 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
               save_gif: bool= False,
               constrain_pupil: bool = True,
               normalise_pupil: bool = True,
+              pupil_iters: int = 0,
+              independent_pupils: bool = False,
               **kwargs):
         """
+        independent_pupils : False (default) -> one pupil shared by all streaks.
+            True -> every streak gets its own pupil, and the streaks are reconstructed
+            as separate problems (own object, own pupil, own Tikhonov weights and
+            P/O scale). On the first call with True the current shared pupil is copied
+            to every streak, so a Pipeline can run shared stages first and independent
+            ones after. self.pupil_func then has shape (N_streaks, P0, P1) and
+            self.pupil_slices entries become (streak, slice0, slice1). Going back to a
+            shared pupil is not supported (the per-streak phases/scales of P_s are
+            arbitrary, so there is no unique way to merge them).
         constrain_pupil : keep the pupil zero outside the aperture (ctf).
         normalise_pupil : after each pupil update rescale P -> P/c, O -> O·c so that
             rms|P| = 1 on the covered pupil (removes the free P/O scale drift).
+        pupil_iters : 0 -> P_M fits the objects for the current pupil, and after the
+            step the objects then the pupil are fit once to the estimate.
+            n > 0 -> P_M also frees the pupil (n rounds of pupil <-> object LSQ, see
+            algorithms.project_model_fit), and the update after the step is the same
+            joint fit to the estimate. On object-only iterations (object_steps cycle,
+            or a fixed pupil) the pupil stays fixed in both.
         """
         
+        self._set_pupil_mode(independent_pupils)
+
         if live_plot and self.liveplot_init:
-            
+
             self.rec_obj_images = self.inverse_fft(self.rec_fourier_images)
             self._initialize_live_plot()
             self._update_live_plot()
@@ -47,11 +65,16 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         step_args = self.GetKwArgs(kernel.step, kwargs)
         ctf = self.ctf if constrain_pupil else None
         cover = self.pupil_cover_mask()
-                
+        kernel.pupil_ctf = ctf
+        kernel.pupil_cover = cover if normalise_pupil else None
+
         for it in range(iterations):
-            
+
             old_PSI = self.PSI.copy()
-            
+
+            pupil_free = object_steps is None or (it % (object_steps + pupil_steps)) >= object_steps
+            kernel.pupil_iters = pupil_iters if pupil_free else 0
+
             # ________ Update PSI ________
             self.PSI = kernel.step(PSI=self.PSI, 
                                   objectFTs = self.rec_fourier_images, 
@@ -70,9 +93,18 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             # Exit waves to fit object/pupil to (P_D(PSI) for RAAR_standard, PSI otherwise)
             PSI_est = kernel.solution_estimate(self.PSI, self.images)
 
+            # ________ Joint object + pupil fit (same as P_M) ________
+            if pupil_iters > 0:
+                _, self.rec_fourier_images, self.pupil_func = project_model_fit(
+                    kernel, PSI_est, self.pupil_slices, self.object_slices,
+                    self.pupil_func, self.rec_fourier_images)
+
+                if pupil_free and zernike_steps is not None and it % zernike_steps == 0:
+                    self._zernike_project_pupil()
+                    print("Zernike Update")
 
             # ________ Object update ________
-            if object_steps is not None:
+            elif object_steps is not None:
                 if (it % (object_steps + pupil_steps)) < object_steps:
                     self.rec_fourier_images = kernel.update_object_fts(
                         PSI=PSI_est, 
@@ -98,13 +130,9 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                         self.pupil_func, self.rec_fourier_images = normalise_pupil_scale(
                             self.pupil_func, self.rec_fourier_images, cover)
                     print('Pupil Update')
-                    
+
                     if zernike_steps is not None and it % zernike_steps == 0 :
-                        pha = np.angle(self.pupil_func)
-                        amp = np.abs(self.pupil_func)
-                        self.pupil_func = amp * np.exp(
-                            1j * SquarePolynomials.project_wavefront(pha, coords=self.pupil_coords)
-                        )
+                        self._zernike_project_pupil()
                         print("Zernike Update")
             else: 
                 self.rec_fourier_images = kernel.update_object_fts(
@@ -130,13 +158,9 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                     self.pupil_func, self.rec_fourier_images = normalise_pupil_scale(
                         self.pupil_func, self.rec_fourier_images, cover)
                 print('Pupil Update')
-                    
+
                 if zernike_steps is not None and it % zernike_steps == 0 :
-                    pha = np.angle(self.pupil_func)
-                    amp = np.abs(self.pupil_func)
-                    self.pupil_func = amp * np.exp(
-                        1j * SquarePolynomials.project_wavefront(pha, coords=self.pupil_coords)
-                    )
+                    self._zernike_project_pupil()
                     print("Zernike Update")
                         
             # ________ Error ________
@@ -189,7 +213,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 self._gif_frames_pha.append(phase_uint8)
 
                 # Normalization for visualization (optional but recommended)
-                phase = np.angle(self.pupil_func) 
+                phase = np.angle(self.pupil_display())
                 phase_norm = (phase + np.pi) / (2 * np.pi)
                 phase_uint8 = (phase_norm * 255).astype(np.uint8)
                 self._gif_frames_pupil.append(phase_uint8)
@@ -205,6 +229,44 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 cover[sl] = True
             self.pupil_cover = cover & (np.abs(self.ctf) > 0)
         return self.pupil_cover
+
+    # ________ Shared / independent pupil ________
+
+    @property
+    def independent_pupils(self):
+        return np.ndim(self.pupil_func) == 3
+
+    def _set_pupil_mode(self, independent):
+        if independent and not self.independent_pupils:
+            self.split_pupil()
+        elif not independent and self.independent_pupils:
+            raise ValueError(
+                "The pupils are already independent (one per streak); a shared pupil "
+                "cannot be recovered from them. Pass independent_pupils=True.")
+
+    def split_pupil(self):
+        """Shared pupil -> one copy per streak, shape (N_streaks, P0, P1).
+        Image j then uses pupil_func[object_slices[j]]."""
+        n_streaks = len(self.rec_fourier_images)
+        self.pupil_func = np.repeat(np.asarray(self.pupil_func)[None], n_streaks, axis=0)
+        self._index_pupil_slices_by_streak()
+        print(f"Independent pupils: {n_streaks} streaks, pupil stack {self.pupil_func.shape}")
+
+    def _index_pupil_slices_by_streak(self):
+        """(slice0, slice1) -> (streak, slice0, slice1); no-op if already done."""
+        self.pupil_slices = [sl if len(sl) == 3 else (int(s), sl[0], sl[1])
+                             for sl, s in zip(self.pupil_slices, self.object_slices)]
+        self.pupil_cover = None        # rebuilt with the new shape on next use
+
+    def _zernike_project_pupil(self):
+        """Project the pupil phase onto the Zernike basis (each streak's pupil
+        separately when they are independent)."""
+        pupils = self.pupil_func if self.independent_pupils else self.pupil_func[None]
+        out = np.empty_like(pupils)
+        for s, P in enumerate(pupils):
+            out[s] = np.abs(P) * np.exp(
+                1j * SquarePolynomials.project_wavefront(np.angle(P), coords=self.pupil_coords))
+        self.pupil_func = out if self.independent_pupils else out[0]
 
     def _post_process(self, save_gif = False):
 
@@ -232,6 +294,11 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
     def set_state(self, state: dict):
         self.rec_fourier_images = state['objectFT']
         self.pupil_func = state['pupil']
+        if np.ndim(self.pupil_func) == 3:     # state saved with independent pupils
+            self._index_pupil_slices_by_streak()
+        else:                                  # shared pupil: plain (slice0, slice1)
+            self.pupil_slices = [sl[-2:] for sl in self.pupil_slices]
+            self.pupil_cover = None
         self.PSI = state['PSI']
         self.iters_passed = state.get('iters_passed', 0)
         self.losses = state.get('losses', [])

@@ -28,6 +28,7 @@ import hdf5plugin
 import ptyxplore.loader as db
 import ptyxplore.roi_ops as dp
 from ptyxplore.kvectors import fit_global_G, kins_from_G, qz_from_G
+from ptyxplore.tilt_correction import tilt_correction
 
 from ptyphase import zernike
 from ptyphase.runner_ewald import FourierPtychoEwaldEngine
@@ -62,7 +63,7 @@ def parse_args():
     g = parser.add_argument_group("algorithm")
     g.add_argument("--steps", type=str, nargs="+", default=["dnc:300", "er:50"],
                    help=f"Kernel stages run in order, each 'name:iterations[:beta]'. Names: {', '.join(KERNELS)}.")
-    g.add_argument("--beta", type=float, default=1.0,
+    g.add_argument("--beta", type=float, default=0.9,
                    help="Default beta for dm / raar / raar_standard / dnc (a stage's ':beta' overrides it).")
     g.add_argument("--beta_decay", type=optional_float, default=None,
                    help="Multiply beta by this every iteration (dm, raar_standard, dnc).")
@@ -77,7 +78,9 @@ def parse_args():
     g = parser.add_argument_group("pupil")
     g.add_argument("--meta_pupil", type=str, default="random",
                    help="Initial pupil phase: 'random' (random square-Zernike coefficients), 'flat', "
-                        "or a path to a phase .npy (fitted with square Zernikes, e.g. speckle tracking).")
+                        "or a path to a phase .npy or .h5 (fitted with square Zernikes, e.g. speckle tracking).")
+    g.add_argument("--meta_pupil_dset", type=str, default="speckle_tracking/phase",
+                   help="Dataset inside the --meta_pupil .h5 file that holds the pupil phase.")
     g.add_argument("--pupil_delay", type=int, default=0,
                    help="Keep the pupil fixed for the first n iterations (counted over all stages).")
     g.add_argument("--object_steps", type=int, default=0,
@@ -85,6 +88,10 @@ def parse_args():
                         "per --pupil_steps pupil iterations.")
     g.add_argument("--pupil_steps", type=int, default=1,
                    help="Pupil iterations per cycle when --object_steps > 0.")
+    g.add_argument("--pupil_iters", type=int, default=3,
+                   help="Rounds of pupil <-> object LSQ inside the model projection (and in the overlap "
+                        "projection for dnc), so P_M projects onto {P*O} with the pupil free. 0 = pupil "
+                        "fixed in P_M and updated once after each step (the old behaviour).")
     g.add_argument("--zernike_steps", type=int, default=0,
                    help="Project the pupil phase onto square Zernikes every n-th iteration (0 = off; "
                         "not used by dnc).")
@@ -125,14 +132,18 @@ def parse_args():
                    help="Update the support by shrinkwrap every n iterations (0 = off).")
     g.add_argument("--sw_start", type=int, default=0,
                    help="First iteration (over all stages) at which shrinkwrap is active.")
-    g.add_argument("--sw_sigma", type=float, default=1.0, help="Shrinkwrap blur (voxels).")
+    g.add_argument("--sw_sigma", type=float, default=2.0, help="Shrinkwrap blur (voxels).")
     g.add_argument("--sw_threshold", type=float, default=0.1, help="Shrinkwrap threshold (fraction of max).")
 
     # initialisation / output
     g = parser.add_argument_group("initialisation / output")
-    g.add_argument("--init", type=str, default="ones", choices=["ones", "amplitude", "amplitude_random"],
+    g.add_argument("--init", type=str, default="tilt_corrected",
+                   choices=["ones", "amplitude", "amplitude_random", "tilt_corrected", "tilt_corrected_random"],
                    help="Initial slices: unit spectrum, or the FFT of sqrt(mean coherent image) of each "
-                        "streak with zero or random phase.")
+                        "streak ('amplitude') or sqrt(mean of the streak's images after alignment by cross-"
+                        "correlation, ptyxplore tilt_correction) ('tilt_corrected'), with zero or random phase.")
+    g.add_argument("--tc_iters", type=int, default=3,
+                   help="Alignment passes for --init tilt_corrected*.")
     g.add_argument("--seed", type=int, default=None, help="Random seed (pupil and init phases).")
     g.add_argument("--outdir", type=str, default="recon_ewald", help="Output folder (created if missing).")
     g.add_argument("--tag", type=str, default=None, help="Tag added to the output file names (e.g. the job id).")
@@ -213,7 +224,22 @@ def place_streaks(images, kins, qz_c, dqz, nz_pad, order):
     return imgs, ks, counts, qz_offset
 
 
-def initial_pupil(meta_pupil, rng):
+def load_pupil_phase(path, dset):
+    if Path(path).suffix in (".h5", ".hdf5", ".cxi", ".nxs"):
+        with h5py.File(path, "r") as f:
+            if dset not in f:
+                raise SystemExit(f"dataset '{dset}' not found in {path}")
+            phase = np.asarray(f[dset][()], dtype=np.float64)
+        src = f"{path}:{dset}"
+    else:
+        phase, src = np.load(path), path
+    phase = np.squeeze(phase)
+    if phase.ndim != 2:
+        raise SystemExit(f"pupil phase from {src} has shape {phase.shape}; need a 2D array")
+    return phase, src
+
+
+def initial_pupil(meta_pupil, rng, dset=None):
     if meta_pupil == "flat":
         print("Using a flat pupil phase\n")
         return np.ones((256, 256), complex)
@@ -222,19 +248,28 @@ def initial_pupil(meta_pupil, rng):
         coeffs = rng.random(len(modes))
         print("Using random pupil phase\n")
     else:
-        coeffs = np.array(zernike.SquarePolynomials.extract_square_coefficients_vectorized(np.load(meta_pupil)))
-        print(f"Using pupil phase from {meta_pupil}\n")
+        phase, src = load_pupil_phase(meta_pupil, dset)
+        coeffs = np.array(zernike.SquarePolynomials.extract_square_coefficients_vectorized(phase))
+        print(f"Using pupil phase from {src} (shape {phase.shape})\n")
     return np.exp(1j * zernike.SquarePolynomials.get_zernike_wavefront(coeffs, (256, 256)))
 
 
-def initial_slices(imgs, mode, rng):
+def initial_slices(imgs, mode, rng, tc_iters=3):
     Nz = len(imgs)
     shape = next(i for i in imgs if len(i)).shape[1:]
     if mode == "ones":
         return np.ones((Nz, *shape), complex)
-    global_amp = np.sqrt(np.mean(np.concatenate([i for i in imgs if len(i)]), axis=0))
-    amp = np.array([np.sqrt(i.mean(axis=0)) if len(i) else global_amp for i in imgs])
-    phase = rng.uniform(-np.pi, np.pi, amp.shape) if mode == "amplitude_random" else 0.0
+    if mode.startswith("tilt_corrected"):
+        # tilt_correction returns the SUM of the aligned images; divide by the count for the mean.
+        # The spline shifts can overshoot below 0, hence the clip.
+        means = [np.clip(tilt_correction(i, iters=tc_iters)[0] / len(i), 0, None) if len(i) else None
+                 for i in imgs]
+        print(f"Tilt-corrected init: aligned {sum(m is not None for m in means)} streaks ({tc_iters} passes)")
+    else:
+        means = [i.mean(axis=0) if len(i) else None for i in imgs]
+    global_amp = np.sqrt(np.mean([m for m in means if m is not None], axis=0))
+    amp = np.array([np.sqrt(m) if m is not None else global_amp for m in means])
+    phase = rng.uniform(-np.pi, np.pi, amp.shape) if mode.endswith("_random") else 0.0
     obj = amp * np.exp(1j * phase)
     return np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(obj, axes=(1, 2)), axes=(1, 2)), axes=(1, 2))
 
@@ -264,6 +299,7 @@ def run_stages(engine, args):
     zern = args.zernike_steps if args.zernike_steps > 0 else None
     common = dict(constrain_pupil=not args.no_constrain_pupil,
                   normalise_pupil=not args.no_normalise_pupil,
+                  pupil_iters=args.pupil_iters,
                   sw_sigma=args.sw_sigma, sw_threshold=args.sw_threshold, live_plot=False)
 
     it0 = 0
@@ -341,8 +377,8 @@ def main():
     Nz, img_shape = len(imgs), images[0].shape[1:]
 
     # _______________ Initialisation ____________
-    pupil_guess_init = initial_pupil(args.meta_pupil, rng)
-    init_fourier = initial_slices(imgs, args.init, rng)
+    pupil_guess_init = initial_pupil(args.meta_pupil, rng, args.meta_pupil_dset)
+    init_fourier = initial_slices(imgs, args.init, rng, args.tc_iters)
     support = build_support(args, Nz, img_shape, dqz)
 
     # _______________ Recon _______________
@@ -369,14 +405,17 @@ def main():
         'pupil_path': str(pupil_path),
         'axis_flip': args.axis_flip,
         'steps': " ".join(args.steps),
-        'beta': args.beta,
+        'beta_default': args.beta,
+        'stage_betas': " ".join(f"{name}:{beta}" for name, _, beta in args.stages),
         'beta_decay': str(args.beta_decay),
         'lam': args.lam,
         'dm_estimate': args.dm_estimate,
         'pupil': args.meta_pupil,
+        'pupil_dset': args.meta_pupil_dset,
         'pupil_delay': args.pupil_delay,
         'object_steps': args.object_steps,
         'pupil_steps': args.pupil_steps,
+        'pupil_iters': args.pupil_iters,
         'zernike_steps': args.zernike_steps,
         'curvature': not args.no_curvature,
         'dqz': dqz,
@@ -392,6 +431,7 @@ def main():
         'sw_sigma': args.sw_sigma,
         'sw_threshold': args.sw_threshold,
         'init': args.init,
+        'tc_iters': args.tc_iters,
         'seed': str(args.seed),
         'G': G,
         'det_distance_nm': roi.det_distance,
@@ -401,7 +441,7 @@ def main():
     out_dir = Path(args.outdir)
     out_dir.mkdir(parents=True, exist_ok=True)
     tag = f"_{args.tag}" if args.tag else ""
-    save_path = str(out_dir / f"recon_ewald_scan{roi.scan_num}_{args.axis_flip}_iters{total}{tag}_{time_str}")
+    save_path = str(out_dir / f"recon_ewald_scan{roi.scan_num}_iters{total}{tag}_{time_str}")
 
     engine._post_process()
     engine.save_reconsturction(save_path + ".h5", metadata=meta)

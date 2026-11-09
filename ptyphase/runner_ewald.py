@@ -23,6 +23,8 @@ class FourierPtychoEwaldEngine(PhaseRetrievalEwaldBase, FourierPtychoEngine):
         shrinkwrap_steps : every this many iterations replace the support by the blurred
             |obj_3D| thresholded at sw_threshold * max (sigma sw_sigma voxels). If no
             support was given, start from the full box. None -> support stays fixed.
+            There is no update after the last chunk, so geom.support (and the saved
+            Support) is always the one the final iterations ran with.
         Other arguments as FourierPtychoEngine.solve. With object_steps/pupil_steps,
         keep shrinkwrap_steps a multiple of object_steps + pupil_steps (the cycle
         restarts at every chunk).
@@ -44,17 +46,22 @@ class FourierPtychoEwaldEngine(PhaseRetrievalEwaldBase, FourierPtychoEngine):
             n = min(shrinkwrap_steps, iterations - done)
             run(kernel, n, **kwargs)
             done += n
+            if done == iterations:
+                break
             obj = slices_to_object(self.geom, self.rec_fourier_images)
             self.geom.support = shrinkwrap_support(obj, sw_sigma, sw_threshold)
             print(f"Shrinkwrap: support = {100 * self.geom.support.mean():.1f}% of the box")
 
     def _solve_dnc(self, kernel, iterations, object_steps=None, pupil_steps=None,
                    zernike_steps=None, live_plot=False, constrain_pupil=True,
-                   normalise_pupil=True, **kwargs):
+                   normalise_pupil=True, pupil_iters=0, **kwargs):
         """Loop for DnCEwald. The kernel keeps its replicas between iterations; the
         engine holds the concurred estimate (PSI, F) and updates the pupil from it.
         F moves every iteration; object_steps/pupil_steps only gate the pupil update
-        (pupil_steps=0 keeps it fixed)."""
+        (pupil_steps=0 keeps it fixed). pupil_iters > 0 also frees the pupil inside the
+        overlap projection on the iterations where it is updated."""
+        if kwargs.get('independent_pupils', False) or np.ndim(self.pupil_func) == 3:
+            raise NotImplementedError("DnCEwald does not support independent pupils yet")
         if live_plot or zernike_steps is not None:
             print("DnCEwald: live_plot and zernike_steps are not supported, ignoring them")
 
@@ -69,10 +76,14 @@ class FourierPtychoEwaldEngine(PhaseRetrievalEwaldBase, FourierPtychoEngine):
 
         ctf = self.ctf if constrain_pupil else None
         cover = self.pupil_cover_mask()
+        kernel.pupil_ctf = ctf
 
         for it in range(iterations):
 
             old_PSI = self.PSI
+
+            pupil_free = object_steps is None or (it % (object_steps + pupil_steps)) >= object_steps
+            kernel.pupil_iters = pupil_iters if pupil_free else 0
 
             # ________ DnC step ________
             self.PSI, self.rec_fourier_images = kernel.step(
@@ -82,7 +93,7 @@ class FourierPtychoEwaldEngine(PhaseRetrievalEwaldBase, FourierPtychoEngine):
                 images=self.images)
 
             # ________ Pupil update ________
-            if object_steps is None or (it % (object_steps + pupil_steps)) >= object_steps:
+            if pupil_free:
                 self.pupil_func = kernel.update_pupil(
                     PSI=self.PSI,
                     objectFT=self.rec_fourier_images,

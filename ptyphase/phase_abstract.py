@@ -280,7 +280,9 @@ class PhaseRetrievalBase(ABC):
         # Prepare metadata
         metadata["Num_iters"] = self.iters_passed
         metadata["pupil_dims"] = self.pupil_func.shape
-        
+        # Pupil_amplitude/phase are (P0, P1) for a shared pupil, (N_streaks, P0, P1) if independent
+        metadata["independent_pupils"] = np.ndim(self.pupil_func) == 3
+
         with h5py.File(file_path, "w") as h5f:
             # Save metadata as attributes in the root group
             recon_params = h5f.create_group("Recon_Params")
@@ -314,6 +316,13 @@ class PhaseRetrievalBase(ABC):
             losses.create_dataset("main_loss_values", data=np.array(self.losses), compression="gzip")
             losses.create_dataset("data_misfit_values", data=np.array(self.data_misfits), compression="gzip")
             losses.create_dataset("gap_values", data=np.array(self.gaps), compression="gzip")
+
+    def pupil_display(self):
+        """2D pupil for plots: the shared pupil, or the central streak's pupil when
+        every streak has its own (pupil_func of shape (N_streaks, P0, P1))."""
+        if np.ndim(self.pupil_func) == 3:
+            return self.pupil_func[len(self.pupil_func) // 2]
+        return self.pupil_func
 
     # ---------- Fourier Utilities ----------
     @staticmethod
@@ -375,7 +384,7 @@ class LivePlot:
         cbar_fourier = plt.colorbar(fourier_amp, ax=ax_fourier)
         
         # Hide the extra subplot or use it for something else
-        pupil_phase = ax_pupil.imshow(np.angle(self.pupil_func), cmap='viridis', origin='lower')
+        pupil_phase = ax_pupil.imshow(np.angle(self.pupil_display()), cmap='viridis', origin='lower')
         ax_pupil.set_title("Pupil Phase")
         pupil_phase.set_clim(-np.pi, np.pi)
         cbar_pupil = plt.colorbar(pupil_phase, ax=ax_pupil)
@@ -415,8 +424,8 @@ class LivePlot:
         amplitude_obj = np.abs(self.rec_obj_images[central_idx])
         phase_obj = np.angle(self.rec_obj_images[central_idx])
         amplitude_ft =np.log1p(np.abs(self.rec_fourier_images[central_idx]))
-        pupil_pha = np.angle(self.pupil_func)
-        
+        pupil_pha = np.angle(self.pupil_display())
+
         img_amp.set_data(amplitude_obj)
         img_phase.set_data(phase_obj)
         fourier_amp.set_data(amplitude_ft)
@@ -481,7 +490,14 @@ class Plot:
         
         image1 = np.abs(self.pupil_func)
         image2 = np.angle(self.pupil_func)
-    
+
+        if np.ndim(self.pupil_func) == 3:      # independent pupils: slider over streaks
+            two_lists_one_slider(image1, image2,
+                                 vmin1= vmin1, vmax1=vmax1,
+                                 vmin2= vmin2, vmax2=vmax2,
+                                 cmap1=cmap1, cmap2=cmap2)
+            return
+
         plot_images_side_by_side(image1, image2, 
                                  vmin1= vmin1, vmax1=vmax1, 
                                  vmin2= vmin2, vmax2=vmax2, 

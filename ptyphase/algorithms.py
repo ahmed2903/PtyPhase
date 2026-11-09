@@ -14,8 +14,16 @@ class AlgorithmKernel:
     """Base kernel interface for reciprocal-space phase retrieval algorithms.
 
     Methods operate on arrays kept in the Runner.
+
+    Set by the engine before each step (see project_model_fit):
+        pupil_iters : rounds of pupil <-> object LSQ inside P_M (0 = pupil fixed in P_M)
+        pupil_ctf   : aperture the pupil is kept inside (None = unconstrained)
+        pupil_cover : covered pupil pixels for the rms|P| = 1 scale (None = no rescaling)
     """
-    
+    pupil_iters = 0
+    pupil_ctf = None
+    pupil_cover = None
+
     def step_single(self, slices, objectFT, PSI, images, n_jobs, backend):    
         raise NotImplementedError
     
@@ -71,7 +79,11 @@ class AlgorithmKernel:
 
             numer[obj_sl] += np.conjugate(pupil_patch) * psi_i
 
-        mu = eps * denom.max() + 1e-30
+        if np.ndim(pupil) == 3:
+            # independent pupils: streaks are separate problems, so each gets its own mu
+            mu = eps * denom.max(axis=(-2, -1), keepdims=True) + 1e-30
+        else:
+            mu = eps * denom.max() + 1e-30
         if objectFTs is not None:
             numer += mu * objectFTs
         return numer / (denom + mu)
@@ -116,7 +128,11 @@ class AlgorithmKernel:
     def update_pupil(self, PSI, objectFT, pupil_slices, object_slices, pupil_func, ctf=None, eps=1e-3):
         """LSQ pupil for fixed objects; pixels with little object power keep
         their previous value (mu = eps * max denom). Zero outside the aperture
-        `ctf` if given."""
+        `ctf` if given.
+
+        Shared pupil (P0, P1): one LSQ over all images. Independent pupils
+        (Ns, P0, P1) with slices (streak, slice0, slice1): each streak's pupil is fit
+        only to that streak's images, with its own mu."""
         pupil_shape = pupil_func.shape
         denom = np.zeros(pupil_shape, dtype=np.float64)
         numer = np.zeros(pupil_shape, dtype=np.complex128)
@@ -126,7 +142,10 @@ class AlgorithmKernel:
             denom[pup_sl] += np.abs(objectFT[obj_sl])**2
             numer[pup_sl] += np.conjugate(objectFT[obj_sl]) * psi_i
 
-        mu = eps * denom.max() + 1e-30
+        if pupil_func.ndim == 3:
+            mu = eps * denom.max(axis=(-2, -1), keepdims=True) + 1e-30
+        else:
+            mu = eps * denom.max() + 1e-30
         pupil_func_update = (numer + mu * pupil_func) / (denom + mu)
 
         if ctf is not None:
@@ -169,7 +188,7 @@ class AlgorithmKernel:
             gap = || P_D(PSI) - P_M(PSI) || / || PSI ||
         P_M fits the objects to PSI with the pupil held fixed (the exact
         projection onto {P*O} for that pupil), then re-evaluates P*O."""
-        Psi_M, _ = project_model_fit(self, PSI, pupil_slices, object_slices, pupil)
+        Psi_M, _, _ = project_model_fit(self, PSI, pupil_slices, object_slices, pupil, pupil_iters=0)
         Psi_D = project_data(images, PSI)
         return np.linalg.norm(Psi_D - Psi_M) / np.linalg.norm(PSI)
 
@@ -200,30 +219,80 @@ def project_data(images, Psi):
     return Psi_
 
 
-def project_model(pupil_slices, object_slices, pupil, objectFTs):
-        
-    object_stack = objectFTs[object_slices]
-        
+def gather_pupil_patches(pupil, pupil_slices):
+    """Stack of the pupil patches seen by each image, shape (n_img, n0, n1).
+
+    Two pupil layouts:
+      shared      : pupil (P0, P1),     pupil_slices[j] = (slice0, slice1)
+      independent : pupil (Ns, P0, P1), pupil_slices[j] = (streak, slice0, slice1)
+    """
     # CHECK ME: the order of Xs and Ys
-    Ys = np.array([np.arange(sl[0].start, sl[0].stop) for sl in pupil_slices])
-    Xs = np.array([np.arange(sl[1].start, sl[1].stop) for sl in pupil_slices])
-    YY = Ys[:, :, None]  
+    Ys = np.array([np.arange(sl[-2].start, sl[-2].stop) for sl in pupil_slices])
+    Xs = np.array([np.arange(sl[-1].start, sl[-1].stop) for sl in pupil_slices])
+    YY = Ys[:, :, None]
     XX = Xs[:, None, :]
-    
-    pupil_stack = pupil[YY, XX]
-    
+    if pupil.ndim == 3:
+        SS = np.array([sl[0] for sl in pupil_slices])[:, None, None]
+        return pupil[SS, YY, XX]
+    return pupil[YY, XX]
+
+
+def project_model(pupil_slices, object_slices, pupil, objectFTs):
+
+    object_stack = objectFTs[object_slices]
+
+    pupil_stack = gather_pupil_patches(pupil, pupil_slices)
+
     Psi = pupil_stack * object_stack
 
     return Psi
 
 
-def project_model_fit(kernel, PSI, pupil_slices, object_slices, pupil, objectFTs=None):
-    """P_M(PSI) for a fixed pupil: refit the objects to PSI, then re-predict.
-    Exact projection onto {P*O} (up to the small Tikhonov term in
-    update_object_fts). Returns (Psi_M, objectFTs_fit)."""
+def normalise_pupil_scale(pupil, objectFT, cover):
+    """P and S only enter as P·S, so their relative scale is free and drifts during
+    alternating updates. Rescale so that rms|P| = 1 on the covered pupil (P·S unchanged).
+
+    Independent pupils (pupil (Ns, P0, P1), cover the same shape): each streak has its
+    own free scale, so P_s and S_s are rescaled per streak. Streaks with no coverage
+    are left alone."""
+    if pupil.ndim == 3:
+        n_cov = cover.sum(axis=(-2, -1))
+        power = np.sum(np.abs(pupil)**2 * cover, axis=(-2, -1))
+        with np.errstate(invalid='ignore', divide='ignore'):
+            c = np.sqrt(power / n_cov)
+        c[~np.isfinite(c) | (c == 0)] = 1.0
+        return pupil / c[:, None, None], objectFT * c[:, None, None]
+
+    c = np.sqrt(np.mean(np.abs(pupil[cover])**2))
+    if not np.isfinite(c) or c == 0:
+        return pupil, objectFT
+    return pupil / c, objectFT * c
+
+
+def project_model_fit(kernel, PSI, pupil_slices, object_slices, pupil, objectFTs=None,
+                      pupil_iters=None):
+    """P_M(PSI): the nearest P*O to PSI.
+
+    pupil_iters = 0 : pupil fixed, objects refit to PSI. Exact projection onto
+        {P*O} for that pupil (up to the small Tikhonov term in update_object_fts).
+    pupil_iters = n : pupil free too. After the object fit, n rounds of
+        pupil LSQ -> object LSQ (alternating minimisation of ||PSI - P*O||, warm
+        started from the given pupil and objects). The model set is bilinear, so
+        this approaches the joint projection as n grows. The pupil is kept inside
+        kernel.pupil_ctf and rescaled to rms 1 on kernel.pupil_cover (P*O unchanged).
+    None -> kernel.pupil_iters. Returns (Psi_M, objectFTs_fit, pupil_fit)."""
+    if pupil_iters is None:
+        pupil_iters = kernel.pupil_iters
     objectFTs_fit = kernel.update_object_fts(PSI, pupil, pupil_slices, object_slices,
                                              objectFTs=objectFTs)
-    return project_model(pupil_slices, object_slices, pupil, objectFTs_fit), objectFTs_fit
+    for _ in range(pupil_iters):
+        pupil = kernel.update_pupil(PSI, objectFTs_fit, pupil_slices, object_slices, pupil,
+                                    ctf=kernel.pupil_ctf)
+        if kernel.pupil_cover is not None:
+            pupil, objectFTs_fit = normalise_pupil_scale(pupil, objectFTs_fit, kernel.pupil_cover)
+        objectFTs_fit = kernel.update_object_fts(PSI, pupil, pupil_slices, object_slices,
+                                                 objectFTs=objectFTs_fit)
+    return project_model(pupil_slices, object_slices, pupil, objectFTs_fit), objectFTs_fit, pupil
 
 
 def project_Zernike( pupil_slices, object_slices, pupil, objectFTs,  pupil_coords):
@@ -236,14 +305,8 @@ def project_Zernike( pupil_slices, object_slices, pupil, objectFTs,  pupil_coord
                 )
     
     object_stack = objectFTs[object_slices]
-        
-    # CHECK ME: the order of Xs and Ys
-    Ys = np.array([np.arange(sl[0].start, sl[0].stop) for sl in pupil_slices])
-    Xs = np.array([np.arange(sl[1].start, sl[1].stop) for sl in pupil_slices])
-    YY = Ys[:, :, None]  
-    XX = Xs[:, None, :]
-    
-    pupil_stack = zernike_pupil[YY, XX]
+
+    pupil_stack = gather_pupil_patches(zernike_pupil, pupil_slices)
     
     Psi = pupil_stack * object_stack 
     
@@ -255,14 +318,8 @@ def project_support(support, objectFTs, pupil, pupil_slices, object_slices):
     objectFTnew =  fft_images( ifft_images(objectFTs) * support )
     
     object_stack = objectFTnew[object_slices]
-        
-    # CHECK ME: the order of Xs and Ys
-    Ys = np.array([np.arange(sl[0].start, sl[0].stop) for sl in pupil_slices])
-    Xs = np.array([np.arange(sl[1].start, sl[1].stop) for sl in pupil_slices])
-    YY = Ys[:, :, None]  
-    XX = Xs[:, None, :]
-    
-    pupil_stack = pupil[YY, XX]
+
+    pupil_stack = gather_pupil_patches(pupil, pupil_slices)
     
     Psi = pupil_stack * object_stack 
     
@@ -276,7 +333,8 @@ class DM(AlgorithmKernel):
         Ψ <- Ψ + β [ P_D(2 P_M Ψ - Ψ) - P_M Ψ ]  =  (1-β) Ψ + β T_DM(Ψ)
 
     β only shortens the step; the fixed points are those of β = 1. P_M refits
-    the objects to Ψ inside the step (exact projection for the current pupil).
+    the objects (and, with pupil_iters > 0, the pupil) to Ψ inside the step
+    (project_model_fit).
 
     estimate : what the engine fits object/pupil to after the step.
         'data'  -> the shadow P_D(2 P_M Ψ - Ψ). It lies on the data set
@@ -314,8 +372,8 @@ class DM(AlgorithmKernel):
 
     def step(self, pupil_slices, object_slices, objectFTs, pupil_func, PSI, images):
 
-        Psi_model, _ = project_model_fit(self, PSI, pupil_slices, object_slices,
-                                         pupil_func, objectFTs)   # P_M(Ψ)
+        Psi_model, _, _ = project_model_fit(self, PSI, pupil_slices, object_slices,
+                                            pupil_func, objectFTs)   # P_M(Ψ)
 
         Psi_reflection = 2 * Psi_model - PSI
 
@@ -511,12 +569,9 @@ class RAAR(AlgorithmKernel):
     def step(self,PSI, pupil_slices, object_slices,
                     objectFTs, pupil_func, images, **kwargs):
 
-        Psi_reflection_model = 2*project_model(
-                pupil_slices=pupil_slices,
-                object_slices=object_slices,
-                pupil=pupil_func,
-                objectFTs=objectFTs
-                ) - PSI
+        Psi_model, _, _ = project_model_fit(self, PSI, pupil_slices, object_slices,
+                                            pupil_func, objectFTs)   # P_M(Ψ)
+        Psi_reflection_model = 2*Psi_model - PSI
 
         Psi_project_model = project_data(images, Psi_reflection_model)
 
@@ -532,9 +587,9 @@ class RAAR_standard(AlgorithmKernel):
         Ψ_{n+1} = (β/2)·(R_M(R_D(Ψ)) + Ψ) + (1-β)·P_D(Ψ)
                 = β·Ψ + β·P_M(R_D(Ψ)) + (1-2β)·P_D(Ψ)
 
-    β = 1 is Douglas-Rachford (Fienup HIO with β = 1). P_M is the exact
-    projection for the current pupil: the objects are refitted to R_D(Ψ)
-    inside the step. The solution is read from P_D(Ψ), so the engine fits
+    β = 1 is Douglas-Rachford (Fienup HIO with β = 1). P_M refits the objects
+    (and, with pupil_iters > 0, the pupil) to R_D(Ψ) inside the step
+    (project_model_fit). The solution is read from P_D(Ψ), so the engine fits
     object/pupil to `solution_estimate(Ψ)` rather than to the iterate.
 
     beta_decay multiplies β every step, but never below beta_min: as β→0
@@ -552,8 +607,8 @@ class RAAR_standard(AlgorithmKernel):
         Psi_data = project_data(images, PSI)           # P_D(Ψ)
         R_D = 2 * Psi_data - PSI                       # R_D(Ψ)
 
-        P_M_RD, _ = project_model_fit(self, R_D, pupil_slices, object_slices,
-                                      pupil_func, objectFTs)   # P_M(R_D(Ψ))
+        P_M_RD, _, _ = project_model_fit(self, R_D, pupil_slices, object_slices,
+                                         pupil_func, objectFTs)   # P_M(R_D(Ψ))
 
         Psi_n = self.beta * PSI + self.beta * P_M_RD + (1 - 2 * self.beta) * Psi_data
 
@@ -577,12 +632,8 @@ class ER(AlgorithmKernel):
     def step(self, PSI, pupil_slices, object_slices,
              objectFTs, pupil_func, images, **kwargs):
 
-        Psi_model = project_model(
-            pupil_slices=pupil_slices,
-            object_slices=object_slices,
-            pupil=pupil_func,
-            objectFTs=objectFTs
-        )
+        Psi_model, _, _ = project_model_fit(self, PSI, pupil_slices, object_slices,
+                                            pupil_func, objectFTs)   # P_M(Ψ)
         return project_data(images, Psi_model)
 
 

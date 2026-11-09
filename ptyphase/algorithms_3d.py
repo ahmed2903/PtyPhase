@@ -13,7 +13,8 @@ exact projection (for a fixed pupil and no support constraint).
 """
 import numpy as np
 from .utils_pr import time_it
-from .algorithms import AlgorithmKernel, project_data, ifft_images, fft_images
+from .algorithms import (AlgorithmKernel, project_data, ifft_images, fft_images,
+                         normalise_pupil_scale)
 
 
 # ~~~___________________ Sampling operators ___________________~~~
@@ -129,15 +130,6 @@ def pupil_coverage(geom, pupil_shape):
     flat = (geom.pup_idx0[:, :, None] * pupil_shape[1] + geom.pup_idx1[:, None, :])
     counts = np.bincount(flat.ravel(), minlength=pupil_shape[0] * pupil_shape[1])
     return (counts > 0).reshape(pupil_shape)
-
-
-def normalise_pupil_scale(pupil, objectFT, cover):
-    """P and S only enter as P·S, so their relative scale is free and drifts during
-    alternating updates. Rescale so that rms|P| = 1 on the covered pupil (P·S unchanged)."""
-    c = np.sqrt(np.mean(np.abs(pupil[cover])**2))
-    if not np.isfinite(c) or c == 0:
-        return pupil, objectFT
-    return pupil / c, objectFT * c
 
 
 # ~~~___________________ Projections ___________________~~~

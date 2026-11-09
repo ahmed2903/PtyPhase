@@ -3,8 +3,8 @@ Curved-slice <-> 3D object mapping, 3D support and kernels for the per-streak en
 (see phase_abstract_ewald).
 
 Kernels are the 2D ones from algorithms.py with `EwaldSupportMixin` in front: every
-object fit (update_object_fts, hence every project_model_fit inside DM / RAAR_standard
-and compute_gap) becomes
+object fit (update_object_fts, hence every object fit inside project_model_fit, i.e. P_M
+of every kernel, the joint object/pupil rounds and compute_gap) becomes
 
     per-streak LSQ  ->  slices -> 3D object  ->  * support  ->  3D object -> slices
 
@@ -118,7 +118,8 @@ class DnCEwald(AlgorithmKernel):
     of only the variables it involves:
 
         data     D : PSI_D          -> modulus replacement
-        overlap  O : (PSI_O, F_O)   -> PSI = P*F (project_overlap, metric weight lam on F)
+        overlap  O : (PSI_O, F_O)   -> PSI = P*F (project_overlap, metric weight lam on F);
+                                       with pupil_iters > 0 the pupil is free in it too
         support  S : F_S            -> 3D real-space support on the curved slices
 
     x = [PSI_D, PSI_O, F_O, F_S]. Divide P_A projects every replica onto its own
@@ -154,8 +155,19 @@ class DnCEwald(AlgorithmKernel):
         self.x[2] = self.x[2] * c
         self.x[3] = self.x[3] * c
 
+    def _project_overlap(self, PSI, F, pupil, pupil_slices, object_slices):
+        """project_overlap with the pupil free too: onto {PSI = P*F, any P in the aperture},
+        minimising |P*F' - PSI|^2 + lam |F' - F|^2 over (P, F') by self.pupil_iters rounds of
+        F' LSQ -> P LSQ, warm started from `pupil`. The pupil is private to this constraint
+        (no replica). No rms rescaling here: the lam term fixes the P/F scale."""
+        for _ in range(self.pupil_iters):
+            _, F_new = project_overlap(PSI, F, pupil, pupil_slices, object_slices, self.lam)
+            pupil = self.update_pupil(PSI, F_new, pupil_slices, object_slices, pupil,
+                                      ctf=self.pupil_ctf)
+        return project_overlap(PSI, F, pupil, pupil_slices, object_slices, self.lam)
+
     def _divide(self, x, pupil, pupil_slices, object_slices, images):
-        psi_O, F_O = project_overlap(x[1], x[2], pupil, pupil_slices, object_slices, self.lam)
+        psi_O, F_O = self._project_overlap(x[1], x[2], pupil, pupil_slices, object_slices)
         return [project_data(images, x[0]), psi_O, F_O, project_support_3d(self.geom, x[3])]
 
     @staticmethod
