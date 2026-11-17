@@ -1,4 +1,5 @@
 from typing import Tuple, Sequence, Callable, Any
+import weakref
 import numpy as np
 import imageio.v2 as imageio
 
@@ -50,7 +51,8 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
             n > 0 -> P_M also frees the pupil (n rounds of pupil <-> object LSQ, see
             algorithms.project_model_fit), and the update after the step is the same
             joint fit to the estimate. On object-only iterations (object_steps cycle,
-            or a fixed pupil) the pupil stays fixed in both.
+            or a fixed pupil) the pupil stays fixed in both. When the estimate is the
+            iterate (ER, RAAR, DM estimate='model') the next P_M reuses that fit.
         """
         
         self._set_pupil_mode(independent_pupils)
@@ -67,6 +69,7 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
         cover = self.pupil_cover_mask()
         kernel.pupil_ctf = ctf
         kernel.pupil_cover = cover if normalise_pupil else None
+        kernel.model_fit = None      # support / pupil mode may have changed since the last call
 
         for it in range(iterations):
 
@@ -98,6 +101,12 @@ class FourierPtychoEngine(PhaseRetrievalBase, Plot, LivePlot):
                 _, self.rec_fourier_images, self.pupil_func = project_model_fit(
                     kernel, PSI_est, self.pupil_slices, self.object_slices,
                     self.pupil_func, self.rec_fourier_images)
+
+                # When the fit target is the iterate itself (ER, RAAR, DM estimate='model'),
+                # the next step's P_M(PSI) is this same fit: let it reuse the result
+                if PSI_est is self.PSI:
+                    kernel.model_fit = (weakref.ref(self.PSI), self.pupil_func,
+                                        self.rec_fourier_images, kernel.pupil_iters)
 
                 if pupil_free and zernike_steps is not None and it % zernike_steps == 0:
                     self._zernike_project_pupil()

@@ -19,10 +19,13 @@ class AlgorithmKernel:
         pupil_iters : rounds of pupil <-> object LSQ inside P_M (0 = pupil fixed in P_M)
         pupil_ctf   : aperture the pupil is kept inside (None = unconstrained)
         pupil_cover : covered pupil pixels for the rms|P| = 1 scale (None = no rescaling)
+        model_fit   : (weakref to PSI, pupil, objectFTs, pupil_iters) of a fit the engine
+                      already did on PSI; project_model_fit reuses it (None = no fit)
     """
     pupil_iters = 0
     pupil_ctf = None
     pupil_cover = None
+    model_fit = None
 
     def step_single(self, slices, objectFT, PSI, images, n_jobs, backend):    
         raise NotImplementedError
@@ -280,9 +283,16 @@ def project_model_fit(kernel, PSI, pupil_slices, object_slices, pupil, objectFTs
         started from the given pupil and objects). The model set is bilinear, so
         this approaches the joint projection as n grows. The pupil is kept inside
         kernel.pupil_ctf and rescaled to rms 1 on kernel.pupil_cover (P*O unchanged).
-    None -> kernel.pupil_iters. Returns (Psi_M, objectFTs_fit, pupil_fit)."""
+    None -> kernel.pupil_iters. Returns (Psi_M, objectFTs_fit, pupil_fit).
+
+    If kernel.model_fit holds a fit of this same PSI array (with the same number of
+    rounds, and pupil/objectFTs being that fit's result), it is returned without refitting."""
     if pupil_iters is None:
         pupil_iters = kernel.pupil_iters
+    fit = kernel.model_fit
+    if (fit is not None and fit[0]() is PSI and fit[1] is pupil and fit[2] is objectFTs
+            and fit[3] == pupil_iters):
+        return project_model(pupil_slices, object_slices, pupil, objectFTs), objectFTs, pupil
     objectFTs_fit = kernel.update_object_fts(PSI, pupil, pupil_slices, object_slices,
                                              objectFTs=objectFTs)
     for _ in range(pupil_iters):
