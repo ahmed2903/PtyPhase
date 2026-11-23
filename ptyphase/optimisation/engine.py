@@ -28,7 +28,7 @@ import torch
 
 from ..projection.phase_abstract_3d import PhaseRetrieval3DBase, Plot3D
 from ..projection.algorithms_3d import pupil_coverage
-from .forward import EwaldSampler, abs2, ifft2c
+from .forward import EwaldSampler, abs2, ifft2c, ifft3c
 from .losses import get_loss
 from .models import Spectrum3D, PixelPupil, PolyPupil, square_poly_basis, fit_poly_coeffs
 from .regularisers import RegContext
@@ -40,7 +40,10 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.reg_losses = {}
+        self.reg_losses = {}        # name -> per-epoch penalty value (unweighted)
+        self.reg_weights = {}       # name -> per-epoch weight
+        self.reg_info = {}          # name -> description (saved as attrs)
+        self.total_losses = []      # data loss + sum_r weight * penalty, per epoch
         self.epoch_times = []
         self.spectrum_optimiser = self.pupil_optimiser = None
         self.spectrum_scheduler = self.pupil_scheduler = None
@@ -66,6 +69,14 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
         super().prepare(**kwargs)
         self.PSI = None                                   # not used here; free the memory
         self.device = torch.device(device if (device != "cuda" or torch.cuda.is_available()) else "cpu")
+        if self.device.type == "cuda":
+            cc = torch.cuda.get_device_capability(self.device)
+            built = [a for a in torch.cuda.get_arch_list() if a.startswith("sm_")]
+            if built and min(int(a[3:]) for a in built) > 10 * cc[0] + cc[1]:
+                raise RuntimeError(
+                    f"{torch.cuda.get_device_name(self.device)} has compute capability {cc[0]}.{cc[1]}, "
+                    f"but this torch build only supports {built}. Use a newer GPU (e.g. Slurm "
+                    f"--constraint='A100|A6000|H100|L40S') or device='cpu'.")
         self.rdtype = _DTYPES[dtype]
         self.pupil_model = pupil_model
 
@@ -162,12 +173,24 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
         if seed is not None:
             gen.manual_seed(seed)
         regularisers = list(regularisers)
+        names = [r.name for r in regularisers]
+        if len(set(names)) != len(names):
+            raise ValueError(f"regulariser names must be unique, got {names}")
         for r in regularisers:
             self.reg_losses.setdefault(r.name, [])
+            self.reg_weights.setdefault(r.name, [])
+            if hasattr(r, "setup"):
+                r.setup(self)
+            self.reg_info[r.name] = r.describe() if hasattr(r, "describe") else r.name
+            print(f"Regulariser {self.reg_info[r.name]}")
+        self._regularisers = regularisers
 
         for _ in range(epochs):
             ep = self.iters_passed
             t0 = time.time()
+            for r in regularisers:
+                if hasattr(r, "on_epoch"):
+                    r.on_epoch(ep, self)        # e.g. shrinkwrap
             learn_pupil = self.pupil_optimiser is not None and ep >= pupil_start
             do_spec, do_pup = True, learn_pupil
             if learn_pupil and alternate is not None:
@@ -180,8 +203,12 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
                 p.requires_grad_(do_pup)
 
             order = torch.randperm(N, generator=gen) if B < N else torch.arange(N)
-            ep_loss, ep_misfit = 0.0, 0.0
+            ep_loss, ep_misfit, ep_total = 0.0, 0.0, 0.0
             ep_regs = {r.name: 0.0 for r in regularisers}
+            weights = {r.name: float(r.weight_at(ep)) for r in regularisers}
+            # weighted terms first: they must build obj with grad before it is cached
+            active = [r for r in regularisers if weights[r.name]]
+            tracked = [r for r in regularisers if not weights[r.name]]
 
             for b0 in range(0, N, B):
                 idx = order[b0:b0 + B].to(self.device)
@@ -200,12 +227,14 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
 
                 if regularisers:
                     ctx = RegContext(S, P)
-                    for r in regularisers:
-                        w = r.weight_at(ep)
-                        if w:
-                            pen = r.penalty(ctx)
-                            total = total + frac * w * pen
-                            ep_regs[r.name] += frac * pen.item()
+                    for r in active:
+                        pen = r.penalty(ctx)
+                        total = total + frac * weights[r.name] * pen
+                        ep_regs[r.name] += frac * pen.item()
+                    with torch.no_grad():                  # weight 0: value tracked only
+                        for r in tracked:
+                            ep_regs[r.name] += frac * r.penalty(ctx).item()
+                ep_total += total.item()
 
                 with torch.no_grad():
                     ep_misfit += (torch.sum((torch.sqrt(I_pred) - torch.sqrt(I_meas))**2) / norm_amp).item()
@@ -227,16 +256,19 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
                 self.pupil_scheduler.step()
 
             self.losses.append(ep_loss)
+            self.total_losses.append(ep_total)
             self.data_misfits.append(ep_misfit)
             for r in regularisers:
                 self.reg_losses[r.name].append(ep_regs[r.name])
+                self.reg_weights[r.name].append(weights[r.name])
             self.epoch_times.append(time.time() - t0)
             self.iters_passed += 1
 
             if log_every and (ep % log_every == 0):
-                regs = "".join(f", {k} = {v:.4e}" for k, v in ep_regs.items())
+                regs = "".join(f", {k} = {v:.4e} (w {weights[k]:.2e})" for k, v in ep_regs.items())
+                tot = f", total = {ep_total:.4e}" if regularisers else ""
                 what = ("S+P" if do_spec and do_pup else "S" if do_spec else "P")
-                print(f"Epoch {ep} [{what}]: loss = {ep_loss:.4e}, data misfit = {ep_misfit:.4e}"
+                print(f"Epoch {ep} [{what}]: loss = {ep_loss:.4e}{tot}, data misfit = {ep_misfit:.4e}"
                       f"{regs} ({self.epoch_times[-1]:.2f} s)")
 
         self._sync_numpy()
@@ -261,6 +293,11 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
         self.rec_obj_images = self.obj_3D
 
     @torch.no_grad()
+    def current_object(self):
+        """Current 3D object [z, x, y] (internal scale), numpy."""
+        return ifft3c(self.spectrum()).cpu().numpy()
+
+    @torch.no_grad()
     def predict_intensities(self, idx=None):
         """Model intensities in the input-image units, (N or B, n0, n1) numpy."""
         I = self.sampler.intensities(self.spectrum(), self.pupil(), idx)
@@ -274,8 +311,20 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
             losses = h5f["Losses"]
             losses["main_loss_values"].attrs["note"] = "data loss per epoch (normalised, see losses.py)"
             losses.create_dataset("epoch_times_s", data=np.array(self.epoch_times))
+            losses.create_dataset("total_loss_values", data=np.array(self.total_losses))
+            losses["total_loss_values"].attrs["note"] = "data loss + sum_r weight_r * reg_r, per epoch"
             for name, vals in self.reg_losses.items():
-                losses.create_dataset(f"reg_{name}", data=np.array(vals))
+                d = losses.create_dataset(f"reg_{name}", data=np.array(vals))
+                d.attrs["note"] = "unweighted penalty per epoch (also tracked while its weight is 0)"
+                d.attrs["regulariser"] = self.reg_info.get(name, name)
+                losses.create_dataset(f"reg_{name}_weight", data=np.array(self.reg_weights[name]))
+            for r in getattr(self, "_regularisers", []):
+                for key, arr in (r.save_arrays().items() if hasattr(r, "save_arrays") else []):
+                    if arr is not None:
+                        ds = h5f["Reconstructed_data"].create_dataset(key, data=arr, compression="gzip")
+                        ds.attrs["regulariser"] = self.reg_info.get(r.name, r.name)
+                        if hasattr(r, "n_updates"):
+                            ds.attrs["shrinkwrap_updates"] = r.n_updates
             if self.pupil_model == "poly":
                 g = h5f["Reconstructed_data"]
                 g.create_dataset("Pupil_poly_coeffs", data=self.pupil.coeffs.detach().cpu().numpy())

@@ -28,6 +28,7 @@ import ptyxplore.roi_ops as dp
 from ptyxplore.kvectors import fit_global_G, kins_from_G, qz_from_G
 
 from ptyphase.optimisation.engine import OptimFourierPtycho3D
+from ptyphase.optimisation.regularisers import TV3D, Support3D
 
 # shared with the other real-data scripts, so all load and initialise the same way
 from recon_ewald import optional_float, flat, estimate_dqz_from_pixels, initial_pupil
@@ -99,6 +100,37 @@ def parse_args():
                    help="2θ (deg) for --refit_G. None = estimate from the intensity.")
     g.add_argument("--refit_G", action="store_true",
                    help="Refit the global G (and kins) even if the input stores one.")
+
+    # regularisation
+    g = parser.add_argument_group("regularisation (values tracked per epoch in Losses/reg_<name>)")
+    g.add_argument("--tv_weight", type=float, default=0.0,
+                   help="Weight of the 3D total variation of the object (0 = no TV term).")
+    g.add_argument("--tv_mode", type=str, default="amplitude", choices=["amplitude", "complex"],
+                   help="TV of |obj| (phase left free) or of the complex obj (penalises phase changes too).")
+    g.add_argument("--tv_start", type=int, default=0, help="Epoch at which the TV weight switches on.")
+    g.add_argument("--tv_ramp", type=int, default=0,
+                   help="Ramp the TV weight linearly from 0 to --tv_weight over this many epochs.")
+    g.add_argument("--tv_per_nm", action="store_true",
+                   help="Weight the z/x/y differences by 1/voxel size (relative to the x step), i.e. "
+                        "penalise gradients per nm instead of per voxel (dz differs from the scan step).")
+    g.add_argument("--tv_track", action="store_true",
+                   help="Track the TV value per epoch even when --tv_weight is 0.")
+    g.add_argument("--support_size", type=float, nargs="+", default=None, metavar="NM",
+                   help="Support box in nm, centred on the origin: SZ (|z| <= SZ/2, all x, y) or SZ SX SY. "
+                        "Enables the support term: fraction of the object energy outside the support.")
+    g.add_argument("--support_weight", type=float, default=0.0,
+                   help="Weight of the support term (0 = tracked only, if --support_size is given).")
+    g.add_argument("--support_start", type=int, default=0, help="Epoch at which the support weight switches on.")
+    g.add_argument("--support_ramp", type=int, default=0,
+                   help="Ramp the support weight linearly from 0 over this many epochs.")
+    g.add_argument("--sw_threshold", type=float, default=None,
+                   help="Shrinkwrap threshold (fraction of max of the blurred |obj|). Not given = no shrinkwrap, "
+                        "the support stays the box.")
+    g.add_argument("--sw_sigma", type=float, default=1.0, help="Shrinkwrap Gaussian blur sigma (voxels).")
+    g.add_argument("--sw_every", type=int, default=100, help="Shrinkwrap update interval (epochs).")
+    g.add_argument("--sw_start", type=int, default=0, help="First shrinkwrap epoch.")
+    g.add_argument("--sw_free", action="store_true",
+                   help="Let shrinkwrap replace the support; default keeps it inside the --support_size box.")
 
     # initialisation / output
     g = parser.add_argument_group("initialisation / output")
@@ -190,7 +222,18 @@ def main():
     # _______________ Optimise _______________
     if engine.device.type == "cuda":
         torch.cuda.reset_peak_memory_stats()
-    engine.run(epochs=args.epochs, batch_size=args.batch_size, pupil_start=args.pupil_start,
+    regs = []
+    if args.tv_weight > 0 or args.tv_track:
+        dx, dy = scan_step_size
+        axw = (dx / engine.dz, 1.0, dx / dy) if args.tv_per_nm else (1.0, 1.0, 1.0)
+        regs.append(TV3D(weight=args.tv_weight, start=args.tv_start, ramp=args.tv_ramp,
+                         mode=args.tv_mode, axis_weights=axw))
+    if args.support_size is not None:
+        regs.append(Support3D(args.support_size, weight=args.support_weight, start=args.support_start,
+                              ramp=args.support_ramp, sw_threshold=args.sw_threshold, sw_sigma=args.sw_sigma,
+                              sw_every=args.sw_every, sw_start=args.sw_start, sw_in_box=not args.sw_free))
+
+    engine.run(epochs=args.epochs, batch_size=args.batch_size, pupil_start=args.pupil_start, regularisers=regs,
                alternate=args.alternate, loss=args.loss, normalise_pupil=not args.no_normalise_pupil,
                log_every=args.log_every, seed=args.seed)
     peak = torch.cuda.max_memory_allocated() / 1e9 if engine.device.type == "cuda" else float("nan")
@@ -223,6 +266,20 @@ def main():
         'pupil_start': args.pupil_start,
         'alternate': str(args.alternate),
         'normalise_pupil': not args.no_normalise_pupil,
+        'tv_weight': args.tv_weight,
+        'tv_mode': args.tv_mode,
+        'tv_start': args.tv_start,
+        'tv_ramp': args.tv_ramp,
+        'tv_per_nm': args.tv_per_nm,
+        'support_size_nm': str(args.support_size),
+        'support_weight': args.support_weight,
+        'support_start': args.support_start,
+        'support_ramp': args.support_ramp,
+        'sw_threshold': str(args.sw_threshold),
+        'sw_sigma': args.sw_sigma,
+        'sw_every': args.sw_every,
+        'sw_start': args.sw_start,
+        'sw_in_box': not args.sw_free,
         'extend': args.extend,
         'dqz': engine.geom.dqz,
         'dqz_source': args.dqz,
@@ -243,7 +300,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     tag = f"_{args.tag}" if args.tag else ""
     save_path = str(out_dir / f"recon_opt_scan{roi.scan_num}_{args.axis_flip}_{args.pupil_model}"
-                              f"_ep{args.epochs}{tag}_{time_str}.h5")
+                              f"_ep{args.epochs}{'_tv%g' % args.tv_weight if args.tv_weight > 0 else ''}{'_sup%g' % args.support_weight if args.support_size and args.support_weight > 0 else ''}{'_sw' if args.support_size and args.sw_threshold is not None else ''}{tag}_{time_str}.h5")
     engine.save_reconsturction(save_path, metadata=meta)
     print(f"Saved {save_path}")
 
