@@ -65,6 +65,8 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
                             unwrapped phase of the initial pupil on the aperture.
         u_max             : poly: aperture half-width (rad/nm). None -> from ks_pupil.
         spectrum_mask     : optional bool (Nz, n0, n1); S is held at 0 outside it.
+                            'measured' -> measured_mask(): only voxels some data sample
+                            interpolates from are free (unmeasured q_z padding stays 0).
         """
         super().prepare(**kwargs)
         self.PSI = None                                   # not used here; free the memory
@@ -98,6 +100,14 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
         # natural |S|: images have mean 1 and rms|P| = 1, so by Parseval (ifft divides by
         # n0*n1) rms|P S| ~ sqrt(n0*n1). Parameters are S / this, i.e. O(1).
         self.spectrum_scale = float(np.sqrt(np.prod(self.img_shape)))
+        if isinstance(spectrum_mask, str):
+            if spectrum_mask != "measured":
+                raise ValueError("spectrum_mask must be None, 'measured' or a bool array")
+            spectrum_mask = self.measured_mask()
+            print(f"Spectrum mask (measured voxels): {100 * spectrum_mask.mean():.1f}% of the spectrum, "
+                  f"q_z slices {np.flatnonzero(spectrum_mask.any(axis=(1, 2)))[[0, -1]].tolist()} "
+                  f"of 0..{spectrum_mask.shape[0] - 1}")
+        self.spectrum_mask = None if spectrum_mask is None else np.asarray(spectrum_mask, dtype=bool)
         self.spectrum = Spectrum3D(S0, scale=self.spectrum_scale, mask=spectrum_mask, real_dtype=rd, device=dev)
 
         if pupil_model == "pixel":
@@ -127,6 +137,16 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
         self._sync_numpy()
         print(f"Optimiser engine on {self.device} ({dtype}): {self.num_images} images "
               f"{tuple(self.img_shape)}, spectrum {self.geom.obj_shape}, pupil {P0.shape} ({pupil_model})")
+
+    def measured_mask(self):
+        """Bool (Nz, n0, n1): voxels that at least one data sample interpolates from with a
+        non-zero weight (independent of the pupil). All others never enter the forward model."""
+        g = self.geom
+        Nz, M = g.obj_shape[0], g.n_lat
+        i0, w = g.node0.ravel(), g.w.ravel()
+        cnt = (np.bincount(i0, weights=(w < 1).astype(float), minlength=Nz * M)
+               + np.bincount(i0 + M, weights=(w > 0).astype(float), minlength=Nz * M))
+        return (cnt > 0).reshape(g.obj_shape)
 
     def pupil_cover_mask(self):
         """Bool mask of the pupil pixels the data constrains (inside the aperture)."""
@@ -318,6 +338,10 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
                 d.attrs["note"] = "unweighted penalty per epoch (also tracked while its weight is 0)"
                 d.attrs["regulariser"] = self.reg_info.get(name, name)
                 losses.create_dataset(f"reg_{name}_weight", data=np.array(self.reg_weights[name]))
+            if getattr(self, "spectrum_mask", None) is not None:
+                ds = h5f["Reconstructed_data"].create_dataset("Spectrum_mask", data=self.spectrum_mask,
+                                                              compression="gzip")
+                ds.attrs["note"] = "S held at 0 outside (q_z, Kx, Ky)"
             for r in getattr(self, "_regularisers", []):
                 for key, arr in (r.save_arrays().items() if hasattr(r, "save_arrays") else []):
                     if arr is not None:

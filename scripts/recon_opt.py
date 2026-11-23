@@ -96,6 +96,9 @@ def parse_args():
                         "mean q_z; needs streak-split input).")
     g.add_argument("--qz_oversample", type=float, default=1.0, help="q_z grid spacing = dqz / this.")
     g.add_argument("--nz_pad", type=int, default=2, help="Extra q_z nodes on each side of the sampled range.")
+    g.add_argument("--mask_unmeasured", action=argparse.BooleanOptionalAction, default=True,
+                   help="Hold spectrum voxels that no data sample reaches (q_z padding, uncovered edges) at 0, "
+                        "so regularisers cannot fill them (default on; --no-mask_unmeasured to free them).")
     g.add_argument("--ttheta_deg", type=optional_float, default=None,
                    help="2θ (deg) for --refit_G. None = estimate from the intensity.")
     g.add_argument("--refit_G", action="store_true",
@@ -206,7 +209,8 @@ def main():
                                   pupil_func=pupil_guess, ks_pupil=pupil_kins, lr_psize=scan_step_size)
     engine.prepare(extend=args.extend, dqz=dqz, qz_oversample=args.qz_oversample, nz_pad=args.nz_pad,
                    init=args.init, device=args.device, dtype=args.dtype, pupil_model=args.pupil_model,
-                   freeze_pupil_amp=args.freeze_pupil_amp)
+                   freeze_pupil_amp=args.freeze_pupil_amp,
+                   spectrum_mask="measured" if args.mask_unmeasured else None)
     pupil_init = engine.pupil_func.copy()
     cover = engine.pupil_cover_mask()
     print(f"Pupil coverage: {100 * cover.sum() / max((np.abs(engine.ctf) > 0).sum(), 1):.1f}% of the aperture")
@@ -285,6 +289,7 @@ def main():
         'dqz_source': args.dqz,
         'qz_oversample': args.qz_oversample,
         'nz_pad': args.nz_pad,
+        'mask_unmeasured': args.mask_unmeasured,
         'dz': engine.dz,
         'init': args.init,
         'seed': str(args.seed),
