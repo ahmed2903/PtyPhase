@@ -72,7 +72,7 @@ class PixelPupil(nn.Module):
             P = self.amp * torch.exp(1j * self.phase)
         else:
             P = torch.complex(self.re, self.im)
-        return P * self.ctf
+        return P #* self.ctf
 
     @torch.no_grad()
     def scale_(self, c):
@@ -131,7 +131,7 @@ class PolyPupil(nn.Module):
         return torch.einsum("i,ijk->jk", self.coeffs, self.basis)
 
     def forward(self):
-        return self.amp * torch.exp(1j * self.phase()) * self.ctf
+        return self.amp * torch.exp(1j * self.phase()) #* self.ctf
 
     @torch.no_grad()
     def scale_(self, c):

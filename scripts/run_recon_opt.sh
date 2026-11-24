@@ -19,7 +19,7 @@
 #SBATCH --job-name=fp_recon_opt
 #SBATCH --time=24:00:00
 #SBATCH --partition=allgpu
-#SBATCH --gres=gpu:1
+#SBATCH --constraint="A100|A6000|H100|H200|L40S|RTX6000|RTX8000"   # torch 2.11 needs CC >= 7.5: no P100/V100; Maxwell has no gres
 #SBATCH --nodes=1
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ahmed.mokhtar@desy.de
