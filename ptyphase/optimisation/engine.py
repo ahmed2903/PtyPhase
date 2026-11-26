@@ -203,7 +203,7 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
         alternate    : (n_spec, n_pup) - cycle n_spec spectrum-only epochs with n_pup
                        pupil-only epochs (after pupil_start). None = both every step.
         regularisers : iterable of Regulariser; each added as weight(epoch) * penalty.
-        loss         : 'l2_intensity' or 'l2_amplitude'.
+        loss         : 'l2_intensity', 'l2_amplitude' or 'poisson' (see losses.py).
         normalise_pupil : after each pupil step, rescale P -> P/c, S -> S*c (rms|P| = 1 on the
                        covered pupil). The model output is unchanged.
         """

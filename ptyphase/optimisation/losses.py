@@ -6,6 +6,11 @@ epoch gives the full-data loss.
     l2_intensity : sum (I - I_meas)^2         / sum I_meas^2
     l2_amplitude : sum (sqrt I - sqrt I_meas)^2 / sum I_meas      (= the projection engines'
                                                                     data misfit)
+    poisson      : sum (I - I_meas + I_meas log(I_meas / I))  / sum I_meas
+                   Poisson negative log-likelihood up to a data-only constant (generalised KL /
+                   half the Poisson deviance): 0 at a perfect fit, every term >= 0, and
+                   0 log 0 = 0, so zero-count pixels just ask for I -> 0. Correct weighting for
+                   photon-counting data (each pixel's error relative to its own shot noise).
 
 Optional per-pixel weights w (same shape as I, 0 = pixel excluded): every sum, including the
 normaliser, runs over w * (...), so masked pixels neither pull the model nor count in the scale.
@@ -27,9 +32,20 @@ def l2_amplitude(I_pred, I_meas, norm, w=None):
     return _wsum((torch.sqrt(I_pred + _EPS) - torch.sqrt(I_meas))**2, w) / norm
 
 
+_PEPS = 1e-9          # keeps log(I) finite where the model is exactly dark (images have mean 1)
+
+
+def poisson(I_pred, I_meas, norm, w=None):
+    Ip = I_pred + _PEPS
+    # I_meas log I_meas is a data-only constant (0 log 0 = 0); kept separate so the gradient
+    # is exactly 1 - I_meas / I, finite at zero-count pixels
+    return _wsum(Ip - I_meas + torch.xlogy(I_meas, I_meas) - I_meas * torch.log(Ip), w) / norm
+
+
 LOSSES = {
     "l2_intensity": (l2_intensity, lambda I, w=None: _wsum(I**2, w)),
     "l2_amplitude": (l2_amplitude, lambda I, w=None: _wsum(I, w)),
+    "poisson": (poisson, lambda I, w=None: _wsum(I, w)),
 }
 
 

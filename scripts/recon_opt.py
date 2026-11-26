@@ -55,7 +55,7 @@ def parse_args():
     # optimisation
     g = parser.add_argument_group("optimisation")
     g.add_argument("--epochs", type=int, default=1000, help="Passes over all images.")
-    g.add_argument("--loss", type=str, default="l2_intensity", choices=["l2_intensity", "l2_amplitude"])
+    g.add_argument("--loss", type=str, default="l2_intensity", choices=["l2_intensity", "l2_amplitude", "poisson"])
     g.add_argument("--optimiser", type=str, default="adam", choices=["adam", "sgd"])
     g.add_argument("--lr_spectrum", type=float, default=1e-2,
                    help="Learning rate of the spectrum (relative: S is stored in units of sqrt(n0*n1)).")
