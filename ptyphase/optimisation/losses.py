@@ -6,23 +6,30 @@ epoch gives the full-data loss.
     l2_intensity : sum (I - I_meas)^2         / sum I_meas^2
     l2_amplitude : sum (sqrt I - sqrt I_meas)^2 / sum I_meas      (= the projection engines'
                                                                     data misfit)
+
+Optional per-pixel weights w (same shape as I, 0 = pixel excluded): every sum, including the
+normaliser, runs over w * (...), so masked pixels neither pull the model nor count in the scale.
 """
 import torch
 
 _EPS = 1e-12
 
 
-def l2_intensity(I_pred, I_meas, norm):
-    return torch.sum((I_pred - I_meas)**2) / norm
+def _wsum(x, w):
+    return torch.sum(x) if w is None else torch.sum(w * x)
 
 
-def l2_amplitude(I_pred, I_meas, norm):
-    return torch.sum((torch.sqrt(I_pred + _EPS) - torch.sqrt(I_meas))**2) / norm
+def l2_intensity(I_pred, I_meas, norm, w=None):
+    return _wsum((I_pred - I_meas)**2, w) / norm
+
+
+def l2_amplitude(I_pred, I_meas, norm, w=None):
+    return _wsum((torch.sqrt(I_pred + _EPS) - torch.sqrt(I_meas))**2, w) / norm
 
 
 LOSSES = {
-    "l2_intensity": (l2_intensity, lambda I: torch.sum(I**2)),
-    "l2_amplitude": (l2_amplitude, lambda I: torch.sum(I)),
+    "l2_intensity": (l2_intensity, lambda I, w=None: _wsum(I**2, w)),
+    "l2_amplitude": (l2_amplitude, lambda I, w=None: _wsum(I, w)),
 }
 
 

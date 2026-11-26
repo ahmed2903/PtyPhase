@@ -96,6 +96,12 @@ def parse_args():
                         "mean q_z; needs streak-split input).")
     g.add_argument("--qz_oversample", type=float, default=1.0, help="q_z grid spacing = dqz / this.")
     g.add_argument("--nz_pad", type=int, default=2, help="Extra q_z nodes on each side of the sampled range.")
+    g.add_argument("--pixel_threshold", type=float, default=None,
+                   help="Intensity threshold (input-image units, same for all images). Pixels below it are "
+                        "excluded from the data loss (--threshold_mode mask) or set to 0 (zero). The "
+                        "start-up log prints intensity percentiles to help choose it.")
+    g.add_argument("--threshold_mode", type=str, default="mask", choices=["mask", "zero"],
+                   help="mask: below-threshold pixels do not enter the loss; zero: they are fitted as dark.")
     g.add_argument("--mask_unmeasured", action=argparse.BooleanOptionalAction, default=True,
                    help="Hold spectrum voxels that no data sample reaches (q_z padding, uncovered edges) at 0, "
                         "so regularisers cannot fill them (default on; --no-mask_unmeasured to free them).")
@@ -210,7 +216,8 @@ def main():
     engine.prepare(extend=args.extend, dqz=dqz, qz_oversample=args.qz_oversample, nz_pad=args.nz_pad,
                    init=args.init, device=args.device, dtype=args.dtype, pupil_model=args.pupil_model,
                    freeze_pupil_amp=args.freeze_pupil_amp,
-                   spectrum_mask="measured" if args.mask_unmeasured else None)
+                   spectrum_mask="measured" if args.mask_unmeasured else None,
+                   pixel_threshold=args.pixel_threshold, threshold_mode=args.threshold_mode)
     pupil_init = engine.pupil_func.copy()
     cover = engine.pupil_cover_mask()
     print(f"Pupil coverage: {100 * cover.sum() / max((np.abs(engine.ctf) > 0).sum(), 1):.1f}% of the aperture")
@@ -305,7 +312,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     tag = f"_{args.tag}" if args.tag else ""
     save_path = str(out_dir / f"recon_opt_scan{roi.scan_num}_{args.axis_flip}_{args.pupil_model}"
-                              f"_ep{args.epochs}{'_tv%g' % args.tv_weight if args.tv_weight > 0 else ''}{'_sup%g' % args.support_weight if args.support_size and args.support_weight > 0 else ''}{'_sw' if args.support_size and args.sw_threshold is not None else ''}{tag}_{time_str}.h5")
+                              f"_ep{args.epochs}{'_tv%g' % args.tv_weight if args.tv_weight > 0 else ''}{'_sup%g' % args.support_weight if args.support_size and args.support_weight > 0 else ''}{'_sw' if args.support_size and args.sw_threshold is not None else ''}{('_thr%g%s' % (args.pixel_threshold, 'z' if args.threshold_mode == 'zero' else '')) if args.pixel_threshold is not None else ''}{tag}_{time_str}.h5")
     engine.save_reconsturction(save_path, metadata=meta)
     print(f"Saved {save_path}")
 

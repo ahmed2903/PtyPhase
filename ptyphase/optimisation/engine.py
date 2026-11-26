@@ -51,7 +51,7 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
     # ------------------------------------------------------------- prepare
     def prepare(self, device="cuda", dtype="float64", pupil_model="pixel",
                 freeze_pupil_amp=False, pupil_coeffs=None, u_max=None,
-                spectrum_mask=None, **kwargs):
+                spectrum_mask=None, pixel_threshold=None, threshold_mode="mask", **kwargs):
         """
         kwargs go to PhaseRetrieval3DBase.prepare (extend, dqz, qz_oversample, nz_pad, eps,
         support, z_extent_nm, support_iters, init). Then:
@@ -67,6 +67,13 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
         spectrum_mask     : optional bool (Nz, n0, n1); S is held at 0 outside it.
                             'measured' -> measured_mask(): only voxels some data sample
                             interpolates from are free (unmeasured q_z padding stays 0).
+        pixel_threshold   : intensity threshold, in the units of the input images (same value for
+                            every image). Pixels with I_meas < threshold are handled by
+        threshold_mode    : 'mask' - excluded from the data loss and the misfit (weight 0): the
+                                     model is free there;
+                            'zero' - set to 0 in the data the model is fitted to (kept in the loss:
+                                     the model is pushed to be dark there).
+                            The initial spectrum (init='amplitude') still uses the raw images.
         """
         super().prepare(**kwargs)
         self.PSI = None                                   # not used here; free the memory
@@ -96,6 +103,25 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
         dev, rd = self.device, self.rdtype
         self.sampler = EwaldSampler(self.geom, dev, rd)
         self.images_t = torch.as_tensor(self.images / self.img_scale, dtype=rd, device=dev)
+        self.pixel_weights_t = None
+        self.pixel_threshold, self.threshold_mode = pixel_threshold, threshold_mode
+        p = np.percentile(self.images, [1, 10, 25, 50, 75, 90, 99])
+        print("Image intensities (input units) percentiles 1/10/25/50/75/90/99: "
+              + " / ".join(f"{v:.3g}" for v in p))
+        if pixel_threshold is not None:
+            if threshold_mode not in ("mask", "zero"):
+                raise ValueError("threshold_mode must be 'mask' or 'zero'")
+            below = torch.as_tensor(self.images < pixel_threshold, device=dev)
+            self.masked_pixel_fraction = float(below.float().mean())
+            per_img = below.float().mean(dim=(1, 2)).cpu().numpy()
+            if threshold_mode == "mask":
+                self.pixel_weights_t = (~below).to(rd)
+            else:
+                self.images_t = torch.where(below, torch.zeros((), dtype=rd, device=dev), self.images_t)
+            print(f"Pixel threshold {pixel_threshold:g} ({threshold_mode}): "
+                  f"{100 * self.masked_pixel_fraction:.1f}% of all pixels below; per image "
+                  f"min/median/max {100 * per_img.min():.1f}/{100 * np.median(per_img):.1f}/"
+                  f"{100 * per_img.max():.1f}%, {int((per_img == 1).sum())} images fully below")
         self.cover_t = torch.as_tensor(cover, dtype=torch.bool, device=dev)
         # natural |S|: images have mean 1 and rms|P| = 1, so by Parseval (ifft divides by
         # n0*n1) rms|P S| ~ sqrt(n0*n1). Parameters are S / this, i.e. O(1).
@@ -185,8 +211,9 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
             raise RuntimeError("call set_optimiser() first")
         loss_fn, norm_fn = get_loss(loss)
         I_all = self.images_t
-        norm = norm_fn(I_all)
-        norm_amp = torch.sum(I_all)
+        W_all = self.pixel_weights_t                      # None, or (N, n0, n1) 0/1
+        norm = norm_fn(I_all, W_all)
+        norm_amp = torch.sum(I_all) if W_all is None else torch.sum(W_all * I_all)
         N = self.num_images
         B = N if batch_size is None else min(int(batch_size), N)
         gen = torch.Generator(device="cpu")
@@ -242,7 +269,8 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
                 P = self.pupil()
                 I_pred = abs2(ifft2c(self.sampler.fields(S, P, idx)))
                 I_meas = I_all[idx]
-                total = loss_fn(I_pred, I_meas, norm)
+                W = None if W_all is None else W_all[idx]
+                total = loss_fn(I_pred, I_meas, norm, W)
                 ep_loss += total.item()
 
                 if regularisers:
@@ -257,7 +285,8 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
                 ep_total += total.item()
 
                 with torch.no_grad():
-                    ep_misfit += (torch.sum((torch.sqrt(I_pred) - torch.sqrt(I_meas))**2) / norm_amp).item()
+                    r2 = (torch.sqrt(I_pred) - torch.sqrt(I_meas))**2
+                    ep_misfit += ((torch.sum(r2) if W is None else torch.sum(W * r2)) / norm_amp).item()
 
                 if not torch.isfinite(total):
                     raise FloatingPointError(f"non-finite loss at epoch {ep}")
@@ -325,7 +354,10 @@ class OptimFourierPtycho3D(PhaseRetrieval3DBase, Plot3D):
 
     def save_reconsturction(self, file_path, metadata={}):
         metadata = dict(metadata, engine="OptimFourierPtycho3D", pupil_model=self.pupil_model,
-                        image_scale=self.img_scale)
+                        image_scale=self.img_scale,
+                        pixel_threshold=str(getattr(self, "pixel_threshold", None)),
+                        threshold_mode=str(getattr(self, "threshold_mode", None)),
+                        masked_pixel_fraction=getattr(self, "masked_pixel_fraction", 0.0))
         super().save_reconsturction(file_path, metadata)
         with h5py.File(file_path, "a") as h5f:
             losses = h5f["Losses"]
