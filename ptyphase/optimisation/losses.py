@@ -14,32 +14,37 @@ epoch gives the full-data loss.
 
 Optional per-pixel weights w (same shape as I, 0 = pixel excluded): every sum, including the
 normaliser, runs over w * (...), so masked pixels neither pull the model nor count in the scale.
+
+per_image=True returns the loss of every image separately, shape (B,) (the sum over the last two
+axes only, same normaliser), so that their sum is the batch loss.
 """
 import torch
 
 _EPS = 1e-12
 
 
-def _wsum(x, w):
-    return torch.sum(x) if w is None else torch.sum(w * x)
+def _wsum(x, w, per_image=False):
+    if w is not None:
+        x = w * x
+    return torch.sum(x, dim=(-2, -1)) if per_image else torch.sum(x)
 
 
-def l2_intensity(I_pred, I_meas, norm, w=None):
-    return _wsum((I_pred - I_meas)**2, w) / norm
+def l2_intensity(I_pred, I_meas, norm, w=None, per_image=False):
+    return _wsum((I_pred - I_meas)**2, w, per_image) / norm
 
 
-def l2_amplitude(I_pred, I_meas, norm, w=None):
-    return _wsum((torch.sqrt(I_pred + _EPS) - torch.sqrt(I_meas))**2, w) / norm
+def l2_amplitude(I_pred, I_meas, norm, w=None, per_image=False):
+    return _wsum((torch.sqrt(I_pred + _EPS) - torch.sqrt(I_meas))**2, w, per_image) / norm
 
 
 _PEPS = 1e-9          # keeps log(I) finite where the model is exactly dark (images have mean 1)
 
 
-def poisson(I_pred, I_meas, norm, w=None):
+def poisson(I_pred, I_meas, norm, w=None, per_image=False):
     Ip = I_pred + _PEPS
     # I_meas log I_meas is a data-only constant (0 log 0 = 0); kept separate so the gradient
     # is exactly 1 - I_meas / I, finite at zero-count pixels
-    return _wsum(Ip - I_meas + torch.xlogy(I_meas, I_meas) - I_meas * torch.log(Ip), w) / norm
+    return _wsum(Ip - I_meas + torch.xlogy(I_meas, I_meas) - I_meas * torch.log(Ip), w, per_image) / norm
 
 
 LOSSES = {

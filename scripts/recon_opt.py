@@ -12,6 +12,13 @@ its own q_z, so the streak grouping is not used (except for --dqz streaks).
     python recon_opt.py --input roi.h5 --epochs 2000 --lr_spectrum 3e-2 --pupil_start 200
     python recon_opt.py --input roi.h5 --pupil_model poly --meta_pupil st_phase.npy --epochs 1000
 
+Per-streak position refinement (one offset per streak along the in-pupil normal of the streaks):
+    python recon_opt.py --input roi_streaked.h5 --epochs 3000 --streak_shifts streaks \
+        --lr_shift 0.05 --shift_start 1000 --shift_scan_epochs 1000 2000
+Scan an existing result only (per-streak loss vs offset, S and P fixed):
+    python recon_opt.py --input roi_streaked.h5 --init_from old_result.h5 --epochs 0 \
+        --streak_shifts streaks --shift_scan_epochs 0
+
 See `python recon_opt.py --help` for everything else.
 """
 import argparse
@@ -28,7 +35,7 @@ import ptyxplore.roi_ops as dp
 from ptyxplore.kvectors import fit_global_G, kins_from_G, qz_from_G
 
 from ptyphase.optimisation.engine import OptimFourierPtycho3D
-from ptyphase.optimisation.regularisers import TV3D, Support3D
+from ptyphase.optimisation.regularisers import TV3D, Support3D, PupilSmooth, pupil_roughness
 
 # shared with the other real-data scripts, so all load and initialise the same way
 from recon_ewald import optional_float, flat, estimate_dqz_from_pixels, initial_pupil
@@ -110,6 +117,32 @@ def parse_args():
     g.add_argument("--refit_G", action="store_true",
                    help="Refit the global G (and kins) even if the input stores one.")
 
+    # streak position refinement
+    g = parser.add_argument_group("streak shifts (per-streak offset of the pupil position, perpendicular to the streaks)")
+    g.add_argument("--streak_shifts", type=str, default=None, choices=["streaks", "qz"],
+                   help="Enable: one offset per input streak ('streaks', needs streak-split input) or per q_z bin "
+                        "of width dqz ('qz', for a flat stack). Uses the sub-pixel forward model.")
+    g.add_argument("--shift_mode", type=str, default="kout", choices=["kout", "kin"],
+                   help="kout: k_out and k_in move together, q_z follows (a detector-mapping error, one G); "
+                        "kin: only k_in moves (a per-streak G).")
+    g.add_argument("--lr_shift", type=optional_float, default=None,
+                   help="Adam learning rate of the offsets (pupil px per step). None = offsets only change in scans.")
+    g.add_argument("--shift_start", type=int, default=0, help="Epoch from which the offsets are learnt.")
+    g.add_argument("--shift_max", type=optional_float, default=None,
+                   help="Bound on |offset| (pupil px). None = 1.5 streak spacings.")
+    g.add_argument("--shift_scan_epochs", type=int, nargs="*", default=[],
+                   help="Epochs at which to grid-scan the per-streak loss vs offset (S, P fixed) and apply the "
+                        "best offsets. An epoch equal to the final epoch count scans after the last epoch.")
+    g.add_argument("--shift_scan_range", type=optional_float, default=None,
+                   help="Scan offsets -R..R (pupil px) around the current ones. None = --shift_max.")
+    g.add_argument("--shift_scan_step", type=float, default=1.0, help="Scan step (pupil px).")
+    g.add_argument("--subpixel", action="store_true",
+                   help="Sub-pixel (bilinear) pupil placement, also without --streak_shifts.")
+    g.add_argument("--placement", type=str, default="bilinear", choices=["bilinear", "nearest"],
+                   help="Pupil placement with --streak_shifts: bilinear (sub-pixel, needed to learn the shifts) or "
+                        "nearest (rounded to pupil pixels as in runs without shifts: use it to scan a result that was "
+                        "trained without --subpixel/--streak_shifts, with an integer --shift_scan_step).")
+
     # regularisation
     g = parser.add_argument_group("regularisation (values tracked per epoch in Losses/reg_<name>)")
     g.add_argument("--tv_weight", type=float, default=0.0,
@@ -140,6 +173,19 @@ def parse_args():
     g.add_argument("--sw_start", type=int, default=0, help="First shrinkwrap epoch.")
     g.add_argument("--sw_free", action="store_true",
                    help="Let shrinkwrap replace the support; default keeps it inside the --support_size box.")
+    g.add_argument("--pupil_smooth_weight", type=float, default=0.0,
+                   help="Weight of the pupil roughness term: mean squared finite difference of P over the covered "
+                        "aperture / mean |P|^2 (0 = off). Suppresses pixel-scale pupil texture and the dips at the "
+                        "image-centre pixels that lead to the pixel-pupil blow-up. Scan e.g. 1e-3 .. 1e-1.")
+    g.add_argument("--pupil_smooth_order", type=int, default=2, choices=[1, 2],
+                   help="2: second differences along each pupil axis (curvature; a phase slope of g rad/px costs "
+                        "~g^4, a checkerboard 16 eps^2); 1: first differences (gradient; a slope costs ~g^2).")
+    g.add_argument("--pupil_smooth_start", type=int, default=0,
+                   help="Epoch at which the pupil smoothness weight switches on.")
+    g.add_argument("--pupil_smooth_ramp", type=int, default=0,
+                   help="Ramp the pupil smoothness weight linearly from 0 over this many epochs.")
+    g.add_argument("--pupil_smooth_track", action="store_true",
+                   help="Track the pupil roughness per epoch even when --pupil_smooth_weight is 0.")
 
     # initialisation / output
     g = parser.add_argument_group("initialisation / output")
@@ -147,6 +193,9 @@ def parse_args():
                    help="Initial spectrum: unit on measured voxels, or the LSQ fit of sqrt(I) with zero phase "
                         "through the initial pupil.")
     g.add_argument("--seed", type=int, default=None, help="Random seed (pupil, minibatch order).")
+    g.add_argument("--init_from", type=str, default=None,
+                   help="Start from the spectrum and pupil of a previous recon_opt result (same input, --extend, "
+                        "--dqz, --axis_flip). With --epochs 0 and --shift_scan_epochs 0 this only scans it.")
     g.add_argument("--outdir", type=str, default="recon_opt", help="Output folder (created if missing).")
     g.add_argument("--tag", type=str, default=None, help="Tag added to the output file names (e.g. the job id).")
 
@@ -209,6 +258,20 @@ def main():
     print(f"dqz ({args.dqz}) = {dqz:.4e} rad/nm, wavelength = {wavelength:.5f} nm, "
           f"{sum(len(i) for i in images)} images in {len(images)} stack(s)")
 
+    # _______________ Warm start _______________
+    init_spectrum = init_pupil = None
+    if args.init_from:
+        with h5py.File(args.init_from, "r") as f:
+            R = f["Reconstructed_data"]
+            init_spectrum = (R["Fourier_amplitude"][()] * np.exp(1j * R["Fourier_phase"][()]),
+                             f["Axes/qz_rad_nm_inv"][()])
+            init_pupil = R["Pupil_amplitude"][()] * np.exp(1j * R["Pupil_phase"][()])
+            old = dict(f["Recon_Params"].attrs)
+        for key, new in (("axis_flip", args.axis_flip), ("extend", args.extend)):
+            if key in old and str(old[key]) != str(new):
+                raise SystemExit(f"--init_from was run with {key} = {old[key]}, this run has {new}")
+        print(f"Warm start from {args.init_from} (epochs {old.get('Num_iters', '?')}, dqz {old.get('dqz', '?')})")
+
     # _______________ Engine _______________
     pupil_guess = initial_pupil(args.meta_pupil, rng, args.meta_pupil_dset)
     engine = OptimFourierPtycho3D(images=images, kins=kins, kouts=kouts, G=G, wavelength=wavelength,
@@ -217,14 +280,18 @@ def main():
                    init=args.init, device=args.device, dtype=args.dtype, pupil_model=args.pupil_model,
                    freeze_pupil_amp=args.freeze_pupil_amp,
                    spectrum_mask="measured" if args.mask_unmeasured else None,
-                   pixel_threshold=args.pixel_threshold, threshold_mode=args.threshold_mode)
+                   pixel_threshold=args.pixel_threshold, threshold_mode=args.threshold_mode,
+                   streak_shifts=args.streak_shifts, shift_mode=args.shift_mode, shift_max=args.shift_max,
+                   subpixel=args.subpixel, placement=args.placement,
+                   init_spectrum=init_spectrum, init_pupil=init_pupil)
     pupil_init = engine.pupil_func.copy()
     cover = engine.pupil_cover_mask()
     print(f"Pupil coverage: {100 * cover.sum() / max((np.abs(engine.ctf) > 0).sum(), 1):.1f}% of the aperture")
 
     opt_cls = torch.optim.Adam if args.optimiser == "adam" else torch.optim.SGD
     engine.set_optimiser(lr_spectrum=args.lr_spectrum,
-                         lr_pupil=None if args.fixed_pupil else args.lr_pupil, optimiser=opt_cls)
+                         lr_pupil=None if args.fixed_pupil else args.lr_pupil, optimiser=opt_cls,
+                         lr_shift=args.lr_shift if args.streak_shifts else None)
     if args.lr_decay is not None:
         engine.set_scheduler(torch.optim.lr_scheduler.ExponentialLR, "spectrum", gamma=args.lr_decay)
         if not args.fixed_pupil:
@@ -243,14 +310,31 @@ def main():
         regs.append(Support3D(args.support_size, weight=args.support_weight, start=args.support_start,
                               ramp=args.support_ramp, sw_threshold=args.sw_threshold, sw_sigma=args.sw_sigma,
                               sw_every=args.sw_every, sw_start=args.sw_start, sw_in_box=not args.sw_free))
+    if args.pupil_smooth_weight > 0 or args.pupil_smooth_track:
+        regs.append(PupilSmooth(weight=args.pupil_smooth_weight, start=args.pupil_smooth_start,
+                                ramp=args.pupil_smooth_ramp, order=args.pupil_smooth_order))
 
     engine.run(epochs=args.epochs, batch_size=args.batch_size, pupil_start=args.pupil_start, regularisers=regs,
                alternate=args.alternate, loss=args.loss, normalise_pupil=not args.no_normalise_pupil,
-               log_every=args.log_every, seed=args.seed)
+               log_every=args.log_every, seed=args.seed, shift_start=args.shift_start,
+               shift_scan_epochs=args.shift_scan_epochs, shift_scan_range=args.shift_scan_range,
+               shift_scan_step=args.shift_scan_step)
     peak = torch.cuda.max_memory_allocated() / 1e9 if engine.device.type == "cuda" else float("nan")
     rt = float(np.sum(engine.epoch_times))
-    print(f"Optimisation: {args.epochs} epochs, {rt:.0f} s, final loss {engine.losses[-1]:.4e}, "
-          f"data misfit {engine.data_misfits[-1]:.4e}, peak GPU memory {peak:.2f} GB")
+    if engine.losses:
+        print(f"Optimisation: {args.epochs} epochs, {rt:.0f} s, final loss {engine.losses[-1]:.4e}, "
+              f"data misfit {engine.data_misfits[-1]:.4e}, peak GPU memory {peak:.2f} GB")
+    if engine.shifts is not None:
+        d = engine.shifts.numpy()
+        sp = engine._shift_geom["spacing"]
+        print(f"Streak shifts ({args.shift_mode}): rms {np.sqrt(np.mean(d**2)):.2f} px, max |.| {np.abs(d).max():.2f} px "
+              f"(streak spacing {sp:.2f} px); per streak: " + " ".join(f"{v:+.1f}" for v in d))
+    # pupil health: roughness on the covered aperture, and |P| at the image centres vs their neighbours
+    rough = pupil_roughness(engine.pupil_func, engine.current_pupil_coverage(), order=args.pupil_smooth_order)
+    centre_ratio = float(np.nanmedian(engine.pupil_centre_ratio()))
+    print(f"Pupil roughness (order {args.pupil_smooth_order}, covered aperture) = {rough:.4e}; "
+          f"|P| at the image centres / median of the 8 neighbours: median {centre_ratio:.3f} "
+          f"(1 = no dips; it falls towards 0 before a pixel-pupil blow-up)")
     # the gauge rescales P, so compare on the covered pupil up to a scale
     p0, p1 = pupil_init[cover], engine.pupil_func[cover]
     p1 = p1 * (np.vdot(p1, p0) / np.vdot(p1, p1))
@@ -291,6 +375,12 @@ def main():
         'sw_every': args.sw_every,
         'sw_start': args.sw_start,
         'sw_in_box': not args.sw_free,
+        'pupil_smooth_weight': args.pupil_smooth_weight,
+        'pupil_smooth_order': args.pupil_smooth_order,
+        'pupil_smooth_start': args.pupil_smooth_start,
+        'pupil_smooth_ramp': args.pupil_smooth_ramp,
+        'pupil_roughness': rough,
+        'pupil_centre_ratio': centre_ratio,
         'extend': args.extend,
         'dqz': engine.geom.dqz,
         'dqz_source': args.dqz,
@@ -302,6 +392,17 @@ def main():
         'seed': str(args.seed),
         'G': G,
         'wavelength_nm': wavelength,
+        'streak_shifts': str(args.streak_shifts),
+        'shift_mode': args.shift_mode,
+        'lr_shift': str(args.lr_shift),
+        'shift_start': args.shift_start,
+        'shift_max': str(args.shift_max),
+        'shift_scan_epochs': str(args.shift_scan_epochs),
+        'shift_scan_range': str(args.shift_scan_range),
+        'shift_scan_step': args.shift_scan_step,
+        'subpixel': args.subpixel,
+        'placement': args.placement,
+        'init_from': str(args.init_from),
         'det_distance_nm': roi.det_distance,
         'delta_q': roi.delta_q,
         'runtime_s': rt,
@@ -312,7 +413,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     tag = f"_{args.tag}" if args.tag else ""
     save_path = str(out_dir / f"recon_opt_scan{roi.scan_num}_{args.axis_flip}_{args.pupil_model}"
-                              f"_ep{args.epochs}{'_tv%g' % args.tv_weight if args.tv_weight > 0 else ''}{'_sup%g' % args.support_weight if args.support_size and args.support_weight > 0 else ''}{'_sw' if args.support_size and args.sw_threshold is not None else ''}{('_thr%g%s' % (args.pixel_threshold, 'z' if args.threshold_mode == 'zero' else '')) if args.pixel_threshold is not None else ''}{tag}_{time_str}.h5")
+                              f"_ep{args.epochs}{'_tv%g' % args.tv_weight if args.tv_weight > 0 else ''}{'_sup%g' % args.support_weight if args.support_size and args.support_weight > 0 else ''}{'_psm%g' % args.pupil_smooth_weight if args.pupil_smooth_weight > 0 else ''}{'_sw' if args.support_size and args.sw_threshold is not None else ''}{('_thr%g%s' % (args.pixel_threshold, 'z' if args.threshold_mode == 'zero' else '')) if args.pixel_threshold is not None else ''}{'_shift' + args.shift_mode + ('N' if args.placement == 'nearest' else '') if args.streak_shifts else ''}{'_sub' if args.subpixel and not args.streak_shifts else ''}{'_warm' if args.init_from else ''}{tag}_{time_str}.h5")
     engine.save_reconsturction(save_path, metadata=meta)
     print(f"Saved {save_path}")
 

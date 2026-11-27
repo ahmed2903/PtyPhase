@@ -175,6 +175,10 @@ class PhaseRetrieval3DBase(PhaseRetrievalBase):
         qs = np.sort([np.median(qz0[self.streak_idx == s]) for s in range(self.num_streaks)])
         return float(np.median(np.diff(qs)))
 
+    def _qz_margin(self, qz, dqz):
+        """Extra |q_z| range (rad/nm) the grid must cover beyond the samples. Default 0."""
+        return 0.0
+
     @time_it
     def _build_geometry(self, dqz, qz_oversample, nz_pad, eps, support_iters):
         n0, n1 = self.img_shape
@@ -186,7 +190,9 @@ class PhaseRetrieval3DBase(PhaseRetrievalBase):
             dqz = self._estimate_dqz(qz[:, n0c, n1c])
         dqz = dqz / qz_oversample
 
-        Nz = 2 * int(np.ceil(np.abs(qz).max() / dqz)) + 2 * nz_pad + 2
+        # extra q_z range (rad/nm) a subclass may need, e.g. for samples that move during the fit
+        margin = float(self._qz_margin(qz, dqz))
+        Nz = 2 * int(np.ceil((np.abs(qz).max() + margin) / dqz)) + 2 * nz_pad + 2
         Nz += Nz % 2
         qz_axis = (np.arange(Nz) - Nz // 2) * dqz
 

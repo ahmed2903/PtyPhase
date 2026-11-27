@@ -1,5 +1,6 @@
 """
-Learnable quantities: the 3D object spectrum and the pupil.
+Learnable quantities: the 3D object spectrum, the pupil and (optionally) per-streak offsets of
+the pupil positions (StreakShifts).
 
 Complex quantities are stored as (real, imag) float parameters, not (amplitude, phase):
 the phase gradient is singular where |S| = 0, and most of the 3D spectrum is near zero.
@@ -136,3 +137,57 @@ class PolyPupil(nn.Module):
     @torch.no_grad()
     def scale_(self, c):
         self.amp.div_(c)
+
+
+class StreakShifts(nn.Module):
+    """One offset per group of images (a streak), along a fixed unit vector u in the pupil plane:
+
+        dkin_j = dk * delta[g_j] * u          (rad/nm, lateral [x, y])
+
+    delta is in pupil pixels (dk = sqrt(dk0*dk1), the pupil pitch), so an Adam learning rate is
+    in pixels per step. The sampler turns dkin into a pupil shift (and, in 'kout' mode, the
+    matching q_z shift).
+
+    groups  : (N,) int, group of every image, 0..n_groups-1.
+    u       : (2,) unit vector, perpendicular to the streaks (direction of grad q_z).
+    weights : gauge weights per group (default: number of images in the group).
+
+    gauge_() removes the weighted mean (moving all streaks together is a rigid pupil translation,
+    and in 'kout' mode also a shift of the q_z origin), clamp_() keeps |delta| <= max_shift.
+    """
+
+    def __init__(self, groups, n_groups, u, dk, max_shift, weights=None,
+                 real_dtype=torch.float64, device="cpu"):
+        super().__init__()
+        groups = np.asarray(groups, dtype=np.int64)
+        self.n_groups = int(n_groups)
+        self.dk = float(dk)
+        self.max_shift = float(max_shift)
+        self.delta = nn.Parameter(torch.zeros(self.n_groups, dtype=real_dtype, device=device))
+        self.register_buffer("groups", torch.as_tensor(groups, device=device))
+        self.register_buffer("u", torch.as_tensor(np.asarray(u, dtype=float), dtype=real_dtype, device=device))
+        w = np.bincount(groups, minlength=self.n_groups).astype(float) if weights is None else np.asarray(weights, float)
+        self.register_buffer("w", torch.as_tensor(w / w.sum(), dtype=real_dtype, device=device))
+
+    def forward(self, idx=None, extra=None):
+        """dkin (B, 2) of the images idx (None = all). extra: optional (n_groups,) or scalar
+        added to delta (pupil px), e.g. a trial offset in a scan."""
+        d = self.delta if extra is None else self.delta + extra
+        g = self.groups if idx is None else self.groups[idx]
+        return (self.dk * d[g])[:, None] * self.u[None, :]
+
+    @torch.no_grad()
+    def gauge_(self):
+        self.delta.sub_(torch.sum(self.w * self.delta))
+
+    @torch.no_grad()
+    def clamp_(self):
+        self.delta.clamp_(-self.max_shift, self.max_shift)
+
+    @torch.no_grad()
+    def set_(self, delta):
+        self.delta.copy_(torch.as_tensor(np.asarray(delta, dtype=float), dtype=self.delta.dtype,
+                                         device=self.delta.device))
+
+    def numpy(self):
+        return self.delta.detach().cpu().numpy().copy()
